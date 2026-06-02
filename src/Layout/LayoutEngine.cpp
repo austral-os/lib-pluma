@@ -1,0 +1,893 @@
+#include <iostream>
+
+#include <pluma/Layout/LayoutEngine.hpp>
+#include <sstream>
+#include <string>
+#include <pluma/Typography/DummyTypography.hpp>
+#include "../Render/stb_image.h"
+
+namespace pluma {
+
+LayoutEngine::LayoutEngine(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font)
+    : shaper_(std::move(shaper)), font_(std::move(default_font)) {}
+
+std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
+    std::string_view text, 
+    PageSize page_size, 
+    PageMargins margins, 
+    const FormatRegistry& registry,
+    std::string_view header_text,
+    std::string_view footer_text,
+    uint32_t logical_offset_base
+) {
+    std::vector<std::unique_ptr<PageBox>> pages;
+    
+    if (text.empty()) {
+        auto empty_page = std::make_unique<PageBox>();
+        empty_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+
+        auto empty_block = std::make_unique<BlockBox>();
+        auto empty_line = std::make_unique<LineBox>();
+        auto dummy_run = std::make_unique<RunBox>();
+        
+        dummy_run->logical_offset = logical_offset_base;
+        dummy_run->setBounds({Twips(0), Twips(0), Twips(0), Twips(240)});
+        empty_line->runs.push_back(std::move(dummy_run));
+        empty_line->setBounds({Twips(0), Twips(0), Twips(0), Twips(240)});
+        empty_block->lines.push_back(std::move(empty_line));
+        empty_block->setBounds({margins.left, margins.top, Twips(page_size.width.getValue() - margins.left.getValue() - margins.right.getValue()), Twips(240)});
+        
+        empty_page->blocks.push_back(std::move(empty_block));
+        pages.push_back(std::move(empty_page));
+        return pages;
+    }
+
+
+
+    Twips content_width(page_size.width.getValue() - margins.left.getValue() - margins.right.getValue());
+    Twips content_height(page_size.height.getValue() - margins.top.getValue() - margins.bottom.getValue());
+    if (content_width.getValue() <= 0) content_width = Twips(1);
+    if (content_height.getValue() <= 0) content_height = Twips(1);
+
+    auto current_page = std::make_unique<PageBox>();
+    current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+    Twips current_page_y = margins.top;
+    Twips column_start_y = margins.top;
+    Twips max_page_y = margins.top;
+
+    // 1. Split into paragraphs by \n
+    std::string str_text(text);
+    std::vector<std::string> paragraphs;
+    size_t pos = 0;
+    while ((pos = str_text.find('\n')) != std::string::npos) {
+        paragraphs.push_back(str_text.substr(0, pos));
+        str_text.erase(0, pos + 1);
+    }
+    paragraphs.push_back(str_text);
+
+    uint32_t logical_offset = 0;
+
+    int total_columns = 1;
+    int current_column = 0;
+    Twips column_gap(300); // Approx 20px
+    
+    std::vector<int> ol_counters(10, 0);
+    int last_list_level = 0;
+
+    Twips base_content_width = content_width;
+
+    bool in_table = false;
+    std::unique_ptr<TableBox> current_table;
+    std::unique_ptr<TableRowBox> current_row;
+    std::unique_ptr<TableCellBox> current_cell;
+    std::string cell_buffer;
+    bool cell_first_para = true;
+    uint32_t cell_offset_base = 0;
+    int table_cols = 1;
+    std::vector<Twips> table_col_widths;
+    int col_idx = 0;
+    int table_depth = 0;
+
+    for (const auto& para : paragraphs) {
+        if (para.length() >= 9 && para.substr(0, 9) == "|COLUMNS:") {
+            size_t end_tag = para.find("|", 9);
+            if (end_tag != std::string::npos) {
+                std::string num_str = para.substr(9, end_tag - 9);
+                if (total_columns != std::stoi(num_str)) {
+                    // Changing columns, advance to the maximum Y reached across all columns
+                    if (max_page_y.getValue() > current_page_y.getValue()) {
+                        current_page_y = max_page_y;
+                    }
+                }
+                try {
+                    total_columns = std::max(1, std::stoi(num_str));
+                } catch (...) {
+                    total_columns = 1;
+                }
+                current_column = 0; // reset column when layout changes
+                column_start_y = current_page_y;
+                max_page_y = current_page_y;
+                logical_offset += para.length() + 1;
+                continue;
+                continue;
+            }
+        }
+
+        Twips total_gap = Twips(column_gap.getValue() * (total_columns - 1));
+        Twips column_width = Twips((base_content_width.getValue() - total_gap.getValue()) / total_columns);
+        content_width = column_width;
+        // Line breaking for the entire paragraph (Block)
+        auto block = std::make_unique<BlockBox>();
+        Twips current_x(0);
+        Twips current_y(0);
+        auto current_line = std::make_unique<LineBox>();
+
+        // Query paragraph alignment at the start of the paragraph
+        PropertyBag para_style = registry.getStyleAt(logical_offset_base + logical_offset);
+        if (auto align = para_style.get(PropertyId::TextAlignment)) {
+            block->alignment = std::get<TextAlign>(*align);
+        }
+
+        Twips spacing_before(0);
+        if (auto sb = para_style.get(PropertyId::ParagraphSpacingBefore)) {
+            spacing_before = Twips(std::get<float>(*sb) * 20.0f);
+        }
+        Twips spacing_after(0);
+        if (auto sa = para_style.get(PropertyId::ParagraphSpacingAfter)) {
+            spacing_after = Twips(std::get<float>(*sa) * 20.0f);
+        }
+
+        size_t start = 0;
+        
+        Twips para_left_indent(0);
+        Twips para_right_indent(0);
+        Twips para_first_indent(0);
+
+        if (para.length() >= 8 && para.substr(0, 8) == "|INDENT:") {
+            size_t end_tag = para.find("|", 8);
+            if (end_tag != std::string::npos) {
+                std::string content = para.substr(8, end_tag - 8);
+                size_t c1 = content.find(":");
+                size_t c2 = (c1 != std::string::npos) ? content.find(":", c1 + 1) : std::string::npos;
+                try {
+                    if (c1 != std::string::npos && c2 != std::string::npos) {
+                        float left = std::stof(content.substr(0, c1));
+                        float right = std::stof(content.substr(c1 + 1, c2 - c1 - 1));
+                        float first = std::stof(content.substr(c2 + 1));
+                        para_left_indent = Twips(left * 1440.0f); // convert inches to twips
+                        para_right_indent = Twips(right * 1440.0f);
+                        para_first_indent = Twips(first * 1440.0f);
+                    }
+                } catch(...) {}
+                start = end_tag + 1;
+            }
+        }
+
+        int list_type = -1; // -1 none, 0 UL, 1 OL
+        int list_level = 0;
+        std::string list_style_str;
+
+        if (para.length() >= start + 5 && para.substr(start, 4) == "|UL:") {
+            size_t end_tag = para.find("|", start + 4);
+            if (end_tag != std::string::npos) {
+                list_type = 0;
+                std::string content = para.substr(start + 4, end_tag - (start + 4));
+                size_t colon = content.find(":");
+                try { 
+                    if (colon != std::string::npos) {
+                        list_level = std::max(1, std::stoi(content.substr(0, colon)));
+                        list_style_str = content.substr(colon + 1);
+                    } else {
+                        list_level = std::max(1, std::stoi(content)); 
+                    }
+                } catch(...) { list_level = 1; }
+                start = end_tag + 1;
+            }
+        } else if (para.length() >= start + 5 && para.substr(start, 4) == "|OL:") {
+            size_t end_tag = para.find("|", start + 4);
+            if (end_tag != std::string::npos) {
+                list_type = 1;
+                std::string content = para.substr(start + 4, end_tag - (start + 4));
+                size_t colon = content.find(":");
+                try { 
+                    if (colon != std::string::npos) {
+                        list_level = std::max(1, std::stoi(content.substr(0, colon)));
+                        list_style_str = content.substr(colon + 1);
+                    } else {
+                        list_level = std::max(1, std::stoi(content)); 
+                    }
+                } catch(...) { list_level = 1; }
+                start = end_tag + 1;
+            }
+        }
+
+        if (list_type != -1) {
+            if (list_level < last_list_level) {
+                for (int i = list_level + 1; i < 10; ++i) ol_counters[i] = 0;
+            }
+            if (list_type == 1) { // OL
+                ol_counters[list_level]++;
+            }
+            last_list_level = list_level;
+            
+            block->list_indent = Twips(list_level * 720); // 0.5 inch per level
+            
+            if (list_type == 0) { // UL
+                if (list_style_str == "circle") block->list_marker = "o";
+                else if (list_style_str == "square") block->list_marker = "-";
+                else if (list_style_str == "disc") block->list_marker = "\xE2\x80\xA2";
+                else {
+                    if (list_level % 3 == 1) block->list_marker = "\xE2\x80\xA2";
+                    else if (list_level % 3 == 2) block->list_marker = "o";
+                    else block->list_marker = "-";
+                }
+            } else { // OL
+                int count = ol_counters[list_level];
+                if (list_style_str == "a") {
+                    char c = 'a' + ((count - 1) % 26);
+                    block->list_marker = std::string(1, c) + ".";
+                } else if (list_style_str == "A") {
+                    char c = 'A' + ((count - 1) % 26);
+                    block->list_marker = std::string(1, c) + ".";
+                } else if (list_style_str == "1") {
+                    block->list_marker = std::to_string(count) + ".";
+                } else {
+                    if (list_level % 3 == 1) block->list_marker = std::to_string(count) + ".";
+                    else if (list_level % 3 == 2) {
+                        char c = 'a' + ((count - 1) % 26);
+                        block->list_marker = std::string(1, c) + ".";
+                    } else {
+                        block->list_marker = std::to_string(count) + ")";
+                    }
+                }
+            }
+            
+            // Adjust current_x to indent text
+            current_x = block->list_indent + para_left_indent + para_first_indent;
+        } else {
+            for (int i = 0; i < 10; ++i) ol_counters[i] = 0;
+            last_list_level = 0;
+            current_x = para_left_indent + para_first_indent;
+        }
+
+        auto stylesAreEqual = [](const PropertyBag& a, const PropertyBag& b) {
+            auto& map_a = a.getAll();
+            auto& map_b = b.getAll();
+            if (map_a.size() != map_b.size()) return false;
+            for (const auto& [k, v] : map_a) {
+                auto it = map_b.find(k);
+                if (it == map_b.end() || it->second != v) return false;
+            }
+            return true;
+        };
+
+        if (para.length() >= 5 && para.substr(0, 5) == "|TBL:") {
+            if (in_table) {
+                table_depth++;
+                if (!cell_first_para) cell_buffer += "\n";
+                cell_buffer += para;
+                cell_first_para = false;
+                logical_offset += para.length() + 1;
+                continue;
+            }
+            in_table = true;
+            table_depth = 1;
+            current_table = std::make_unique<TableBox>();
+            current_table->logical_offset = logical_offset_base + logical_offset;
+            size_t cols_pos = para.find("cols=");
+            if (cols_pos != std::string::npos) {
+                table_cols = std::stoi(para.substr(cols_pos + 5));
+            } else {
+                table_cols = 1;
+            }
+            
+            // Try to load custom widths
+            table_col_widths.clear();
+            if (auto widths_opt = registry.getStyleAt(current_table->logical_offset).get(PropertyId::TableColumnWidths)) {
+                std::string widths_str = std::get<std::string>(*widths_opt);
+                size_t pos = 0;
+                while (pos < widths_str.length()) {
+                    size_t comma = widths_str.find(',', pos);
+                    std::string token = (comma == std::string::npos) ? widths_str.substr(pos) : widths_str.substr(pos, comma - pos);
+                    table_col_widths.push_back(Twips(static_cast<int32_t>(std::stof(token) * 15.0f + 0.5f))); // stored in pts
+                    if (comma == std::string::npos) break;
+                    pos = comma + 1;
+                }
+            }
+            
+            // Fill missing with equal remaining
+            if (table_col_widths.size() < static_cast<size_t>(table_cols)) {
+                Twips used(0);
+                for (auto w : table_col_widths) used = used + w;
+                Twips remaining = content_width - used;
+                if (remaining.getValue() < 0) remaining = Twips(0);
+                int missing = table_cols - table_col_widths.size();
+                Twips per_missing(remaining.getValue() / missing);
+                for (int i = 0; i < missing; ++i) table_col_widths.push_back(per_missing);
+            }
+            
+            col_idx = 0;
+            logical_offset += para.length() + 1;
+            continue;
+        }
+
+        if (in_table) {
+            if (para == "|ROW|") {
+                if (table_depth > 1) {
+                    if (!cell_first_para) cell_buffer += "\n";
+                    cell_buffer += para;
+                    cell_first_para = false;
+                    logical_offset += para.length() + 1;
+                    continue;
+                }
+                if (current_cell) {
+                    if (true) {
+                        Twips cell_width = (static_cast<size_t>(col_idx) < table_col_widths.size()) ? table_col_widths[col_idx] : Twips(content_width.getValue() / table_cols);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
+                        if (!cell_pages.empty()) {
+                            for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
+                        }
+                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)}); // arbitrary height for now
+                    }
+                    if (current_row) current_row->cells.push_back(std::move(current_cell));
+                }
+                if (current_row) current_table->rows.push_back(std::move(current_row));
+                current_row = std::make_unique<TableRowBox>();
+                current_cell.reset();
+                col_idx = 0;
+                cell_first_para = true;
+                logical_offset += para.length() + 1;
+                continue;
+            }
+            if (para == "|CEL|") {
+                if (table_depth > 1) {
+                    if (!cell_first_para) cell_buffer += "\n";
+                    cell_buffer += para;
+                    cell_first_para = false;
+                    logical_offset += para.length() + 1;
+                    continue;
+                }
+                if (current_cell) {
+                    if (true) {
+                        Twips cell_width = (static_cast<size_t>(col_idx) < table_col_widths.size()) ? table_col_widths[col_idx] : Twips(content_width.getValue() / table_cols);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
+                        if (!cell_pages.empty()) {
+                            for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
+                        }
+                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
+                    }
+                    if (current_row) current_row->cells.push_back(std::move(current_cell));
+                }
+                current_cell = std::make_unique<TableCellBox>();
+                if (current_row && !current_row->cells.empty()) col_idx++;
+                cell_buffer.clear();
+                cell_first_para = true;
+                logical_offset += para.length() + 1;
+                cell_offset_base = logical_offset;
+                continue;
+            }
+            if (para == "|ENDTBL|") {
+                if (table_depth > 1) {
+                    table_depth--;
+                    if (!cell_first_para) cell_buffer += "\n";
+                    cell_buffer += para;
+                    cell_first_para = false;
+                    logical_offset += para.length() + 1;
+                    continue;
+                }
+                if (current_cell) {
+                    if (true) {
+                        Twips cell_width = (static_cast<size_t>(col_idx) < table_col_widths.size()) ? table_col_widths[col_idx] : Twips(content_width.getValue() / table_cols);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
+                        if (!cell_pages.empty()) {
+                            for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
+                        }
+                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
+                    }
+                    if (current_row) current_row->cells.push_back(std::move(current_cell));
+                }
+                if (current_row) current_table->rows.push_back(std::move(current_row));
+                
+                in_table = false;
+                table_depth = 0;
+                
+                // Add table to document
+                // Wait, table needs to compute cell heights!
+                Twips table_height(0);
+                for (auto& row : current_table->rows) {
+                    Twips max_h(0);
+                    Twips current_x(0);
+                    for (auto& cell : row->cells) {
+                        cell->setBounds({current_x, Twips(0), cell->getBounds().width, cell->getBounds().height});
+                        current_x = current_x + cell->getBounds().width;
+                        // Calculate real cell height
+                        Twips cell_h(120);
+                        if (!cell->blocks.empty()) {
+                            auto& last_cb = cell->blocks.back();
+                            cell_h = last_cb->getBounds().y + last_cb->getBounds().height + Twips(60);
+                        }
+                        if (cell_h.getValue() > max_h.getValue()) max_h = cell_h;
+                    }
+                    for (auto& cell : row->cells) cell->setBounds({cell->getBounds().x, Twips(0), cell->getBounds().width, max_h});
+                    row->setBounds({Twips(0), table_height, content_width, max_h});
+                    table_height = table_height + max_h;
+                }
+                current_table->setBounds({Twips(0), Twips(0), content_width, table_height});
+                
+                auto block = std::make_unique<BlockBox>();
+                block->table = std::move(current_table);
+                block->setBounds({Twips(0), Twips(0), content_width, table_height});
+                
+                if (current_page_y.getValue() + table_height.getValue() > max_page_y.getValue()) {
+                    max_page_y = Twips(current_page_y.getValue() + table_height.getValue());
+                }
+                
+                block->setBounds({column_start_y, current_page_y, content_width, table_height});
+                current_page->blocks.push_back(std::move(block));
+                current_page_y = current_page_y + table_height + Twips(240); // paragraph spacing
+
+                logical_offset += para.length() + 1;
+                continue;
+            }
+            
+            if (!cell_first_para) cell_buffer += "\n";
+            cell_buffer += para;
+            cell_first_para = false;
+            logical_offset += para.length() + 1;
+            continue;
+        }
+
+        {
+            if (para.length() >= 7 && para.substr(0, 7) == "|IMAGE:") {
+                size_t end_tag = para.find("|", 7);
+                if (end_tag != std::string::npos) {
+                    std::string mode_str = para.substr(7, end_tag - 7);
+                    
+                    std::string image_path = "test-img.png"; // Fallback
+                    TextWrapMode mode = TextWrapMode::InLine;
+                    
+                    // Parse optional mode and path, e.g. |IMAGE:Square:logo.png| or |IMAGE:logo.png|
+                    size_t colon_pos = mode_str.find(':');
+                    if (colon_pos != std::string::npos) {
+                        std::string wrap_str = mode_str.substr(0, colon_pos);
+                        image_path = mode_str.substr(colon_pos + 1);
+                        if (wrap_str == "Square") mode = TextWrapMode::Square;
+                        else if (wrap_str == "Tight") mode = TextWrapMode::Tight;
+                        else if (wrap_str == "Through") mode = TextWrapMode::Through;
+                        else if (wrap_str == "TopAndBottom") mode = TextWrapMode::TopAndBottom;
+                        else if (wrap_str == "BehindText") mode = TextWrapMode::BehindText;
+                        else if (wrap_str == "InFrontOfText") mode = TextWrapMode::InFrontOfText;
+                        else {
+                            image_path = mode_str; // Colon was part of the path, or invalid mode. Default InLine.
+                        }
+                    } else {
+                        // If there is no colon, maybe it's just the wrap mode or just the path
+                        if (mode_str == "Square") mode = TextWrapMode::Square;
+                        else if (mode_str == "Tight") mode = TextWrapMode::Tight;
+                        else if (mode_str == "Through") mode = TextWrapMode::Through;
+                        else if (mode_str == "TopAndBottom") mode = TextWrapMode::TopAndBottom;
+                        else if (mode_str == "BehindText") mode = TextWrapMode::BehindText;
+                        else if (mode_str == "InFrontOfText") mode = TextWrapMode::InFrontOfText;
+                        else {
+                            image_path = mode_str;
+                        }
+                    }
+                    
+                    auto img = std::make_unique<ImageBox>();
+                    img->wrap_mode = mode;
+                    img->path = image_path;
+                    img->logical_offset = logical_offset_base + logical_offset + start;
+                    
+                    Twips img_w(3000), img_h(3000); // 200x200px approx fallback
+                    
+                    int real_w = 0, real_h = 0, comp = 0;
+                    if (stbi_info(image_path.c_str(), &real_w, &real_h, &comp) && real_w > 0 && real_h > 0) {
+                        float aspect_ratio = static_cast<float>(real_h) / static_cast<float>(real_w);
+                        // Default to 400px width (6000 twips), or less if the image is smaller
+                        float target_width_px = std::min(400.0f, static_cast<float>(real_w));
+                        float target_height_px = target_width_px * aspect_ratio;
+                        
+                        // Limit height to reasonable size (e.g. 600px max)
+                        if (target_height_px > 600.0f) {
+                            target_height_px = 600.0f;
+                            target_width_px = target_height_px / aspect_ratio;
+                        }
+                        
+                        img_w = Twips(static_cast<int32_t>(target_width_px * 15.0f));
+                        img_h = Twips(static_cast<int32_t>(target_height_px * 15.0f));
+                    }
+                    
+                    PropertyBag img_style = registry.getStyleAt(img->logical_offset);
+                    if (auto w = img_style.get(PropertyId::ImageWidth)) img_w = Twips(std::get<float>(*w) * 15.0f);
+                    if (auto h = img_style.get(PropertyId::ImageHeight)) img_h = Twips(std::get<float>(*h) * 15.0f);
+                    
+                    if (auto id_val = img_style.get(PropertyId::ImageId)) img->image_id = std::get<std::string>(*id_val);
+                    if (auto title_val = img_style.get(PropertyId::ImageTitle)) img->title = std::get<std::string>(*title_val);
+                    
+                    if (mode == TextWrapMode::Square || mode == TextWrapMode::Tight || mode == TextWrapMode::Through) {
+                        img->setBounds({content_width - img_w, current_y, img_w, img_h});
+                        content_width = content_width - img_w - Twips(300); // reduce text width for this block
+                    } else if (mode == TextWrapMode::InLine || mode == TextWrapMode::TopAndBottom) {
+                        Twips x_offset(0);
+                        if (block->alignment == TextAlign::Center) {
+                            x_offset = Twips((content_width.getValue() - img_w.getValue()) / 2);
+                        } else if (block->alignment == TextAlign::Right) {
+                            x_offset = Twips(content_width.getValue() - img_w.getValue());
+                        }
+                        
+                        img->setBounds({x_offset, current_y, img_w, img_h});
+                        current_y = current_y + img_h;
+                        
+                        auto dummy_line = std::make_unique<LineBox>();
+                        dummy_line->setBounds({Twips(0), current_y - img_h, img_w, img_h});
+                        block->lines.push_back(std::move(dummy_line));
+                    } else {
+                        // Absolute positioned behind/front
+                        img->setBounds({Twips(1000), current_y, img_w, img_h});
+                    }
+                    
+                    block->images.push_back(std::move(img));
+                    start = end_tag + 1;
+                    if (start < para.length() && para[start] == ' ') start++;
+                }
+            }
+
+            int drop_cap_lines = 0;
+            Twips dropcap_width(0);
+            Twips dropcap_height(0);
+            if (para.length() - start >= 9 && para.substr(start, 9) == "|DROPCAP:") {
+                size_t end_tag = para.find("|", start + 9);
+                if (end_tag != std::string::npos) {
+                    std::string num_str = para.substr(start + 9, end_tag - start - 9);
+                    try { drop_cap_lines = std::max(1, std::stoi(num_str)); } catch (...) { drop_cap_lines = 1; }
+                    start = end_tag + 1;
+                    if (start < para.length() && para[start] == ' ') start++;
+                }
+            }
+
+            PropertyBag dc_style = registry.getStyleAt(logical_offset_base + logical_offset + start - 1);
+            if (auto dc_lines_opt = dc_style.get(PropertyId::DropCapLines)) {
+                drop_cap_lines = std::get<int>(*dc_lines_opt);
+            }
+            if (drop_cap_lines > 0 && start < para.length()) {
+                std::string first_char = para.substr(start, 1);
+                start++;
+                auto drop_cap = std::make_unique<RunBox>();
+                
+                FontDescriptor dc_desc = font_->getDescriptor();
+                dc_desc.size_pt = dc_desc.size_pt * drop_cap_lines * 1.15f;
+                auto dc_run_font = std::make_shared<DummyFont>(dc_desc);
+                ShapedTextRun dc_run = shaper_->shapeText(first_char, dc_run_font);
+                
+                dropcap_width = dc_run.total_width;
+                dropcap_height = Twips(font_->getDescriptor().size_pt * 20.0f * drop_cap_lines * 1.2f);
+                
+                dc_style.set(PropertyId::FontSize, dc_desc.size_pt);
+                
+                drop_cap->run = std::move(dc_run);
+                drop_cap->style = std::move(dc_style);
+                drop_cap->logical_text = first_char;
+                drop_cap->logical_offset = logical_offset_base + logical_offset + start - 1;
+                drop_cap->setBounds({para_left_indent + para_first_indent, current_y, dropcap_width, dropcap_height});
+                block->drop_cap = std::move(drop_cap);
+                
+                current_x = dropcap_width + Twips(100) + para_left_indent + para_first_indent;
+            }
+
+        while (start < para.length()) {
+            PropertyBag word_style = registry.getStyleAt(logical_offset_base + logical_offset + start);
+
+            size_t run_end = start;
+            while (run_end < para.length() && para[run_end] != ' ') {
+                PropertyBag next_style = registry.getStyleAt(logical_offset_base + logical_offset + run_end);
+                if (!stylesAreEqual(word_style, next_style)) {
+                    break;
+                }
+                run_end++;
+            }
+
+            bool has_space_after = (run_end < para.length() && para[run_end] == ' ');
+
+            std::string word = para.substr(start, run_end - start);
+            if (has_space_after) word += " ";
+
+            FontDescriptor desc = font_->getDescriptor();
+            if (auto fs = word_style.get(PropertyId::FontSize)) desc.size_pt = std::get<float>(*fs);
+            if (auto ff = word_style.get(PropertyId::FontFamily)) desc.family = std::get<std::string>(*ff);
+            if (auto fw = word_style.get(PropertyId::FontWeight)) desc.weight = static_cast<FontWeight>(std::get<uint16_t>(*fw));
+            if (auto fi = word_style.get(PropertyId::FontStyleItalic)) desc.italic = std::get<bool>(*fi);
+
+            if (auto va = word_style.get(PropertyId::VerticalAlignment)) {
+                auto v_align = std::get<VerticalAlign>(*va);
+                if (v_align != VerticalAlign::Baseline) {
+                    desc.size_pt *= 0.65f;
+                }
+            }
+            
+            auto run_font = std::make_shared<DummyFont>(desc);
+            ShapedTextRun run = shaper_->shapeText(word, run_font);
+            Twips word_width = run.total_width;
+
+            Twips available_width = Twips((content_width - para_right_indent).getValue() - current_x.getValue());
+            if (available_width.getValue() < 0) available_width = Twips(0);
+
+            if (word_width.getValue() > available_width.getValue()) {
+                if (current_x.getValue() > (block->list_indent + para_left_indent).getValue()) {
+                    Twips line_height = Twips(240); // 12pt approx
+                    for (const auto& r : current_line->runs) {
+                        Twips h = r->run.max_ascent + r->run.max_descent;
+                        if (h.getValue() > line_height.getValue()) line_height = h;
+                    }
+                    
+                    float line_spacing = 1.0f;
+                    if (auto ls = para_style.get(PropertyId::LineSpacing)) {
+                        line_spacing = std::get<float>(*ls);
+                    }
+                    line_height = Twips(line_height.getValue() * line_spacing);
+
+                    current_line->setBounds({Twips(0), current_y, current_x, line_height});
+                    block->lines.push_back(std::move(current_line));
+
+                    current_line = std::make_unique<LineBox>();
+                    current_y = current_y + line_height;
+                    if (drop_cap_lines > 0 && current_y.getValue() < dropcap_height.getValue()) {
+                        current_x = dropcap_width + Twips(100) + para_left_indent;
+                    } else {
+                        current_x = block->list_indent + para_left_indent;
+                    }
+                    
+                    available_width = Twips((content_width - para_right_indent).getValue() - current_x.getValue());
+                    if (available_width.getValue() < 0) available_width = Twips(0);
+                }
+
+                if (word_width.getValue() > available_width.getValue() && available_width.getValue() > 0) {
+                    size_t fit_len = 0;
+                    Twips fit_width(0);
+                    for (size_t i = 0; i < run.glyphs.size(); ++i) {
+                        if (fit_width.getValue() + run.glyphs[i].x_advance.getValue() > available_width.getValue() && fit_len > 0) {
+                            break;
+                        }
+                        fit_width = fit_width + run.glyphs[i].x_advance;
+                        fit_len++;
+                    }
+                    
+                    if (fit_len == 0) fit_len = 1;
+                    
+                    if (fit_len < run.glyphs.size()) {
+                        run_end = start + fit_len;
+                        has_space_after = false;
+                        word = para.substr(start, fit_len);
+                        run = shaper_->shapeText(word, run_font);
+                        word_width = run.total_width;
+                    }
+                }
+            }
+
+            auto run_box = std::make_unique<RunBox>();
+            run_box->run = std::move(run);
+            run_box->logical_text = word;
+            run_box->logical_offset = logical_offset_base + logical_offset + start;
+            run_box->style = std::move(word_style);
+            run_box->setBounds({current_x, Twips(0), word_width, run_box->run.max_ascent + run_box->run.max_descent});
+
+            current_line->runs.push_back(std::move(run_box));
+            current_x = current_x + word_width;
+
+            start = run_end;
+            if (has_space_after) start++;
+        }
+        } // End of |TABLE| else branch
+
+        if (!current_line->runs.empty()) {
+            Twips line_height = Twips(180);
+            for (const auto& r : current_line->runs) {
+                Twips h = r->run.max_ascent + r->run.max_descent;
+                if (h.getValue() > line_height.getValue()) line_height = h;
+            }
+            
+            float line_spacing = 1.0f;
+            if (auto ls = para_style.get(PropertyId::LineSpacing)) {
+                line_spacing = std::get<float>(*ls);
+            }
+            line_height = Twips(line_height.getValue() * line_spacing);
+
+            current_line->setBounds({Twips(0), current_y, current_x, line_height});
+            current_y = current_y + line_height;
+            block->lines.push_back(std::move(current_line));
+        } else {
+            // Empty paragraph (e.g. consecutive newlines)
+            Twips line_height = Twips(180); // default 12pt approx
+            float line_spacing = 1.0f;
+            if (auto ls = para_style.get(PropertyId::LineSpacing)) {
+                line_spacing = std::get<float>(*ls);
+            }
+            line_height = Twips(line_height.getValue() * line_spacing);
+
+            auto dummy_run = std::make_unique<RunBox>();
+            dummy_run->logical_offset = logical_offset_base + logical_offset + start;
+            dummy_run->setBounds({current_x, Twips(0), Twips(0), line_height});
+            dummy_run->run.max_ascent = Twips(144);
+            dummy_run->run.max_descent = Twips(36);
+            current_line->runs.push_back(std::move(dummy_run));
+
+            current_line->setBounds({Twips(0), current_y, current_x, line_height});
+            current_y = current_y + line_height;
+            block->lines.push_back(std::move(current_line));
+        }
+
+        block->setBounds({margins.left, Twips(0), content_width, current_y}); // Apply left margin offset
+        logical_offset += para.length() + 1; // account for \n
+
+        if (spacing_before.getValue() > 0 && current_page_y.getValue() > margins.top.getValue()) {
+            current_page_y = current_page_y + spacing_before;
+        }
+
+        // 2. Paginate the block with Widow & Orphan control
+        size_t line_index = 0;
+        while (line_index < block->lines.size()) {
+            size_t fit_count = 0;
+            Twips test_y = current_page_y;
+            
+            for (size_t i = line_index; i < block->lines.size(); ++i) {
+                Twips lh = block->lines[i]->getBounds().height;
+                // Bound check against the content height limit (page height - bottom margin)
+                if ((test_y + lh).getValue() > (page_size.height.getValue() - margins.bottom.getValue())) break;
+                test_y = test_y + lh;
+                fit_count++;
+            }
+
+            size_t remaining_in_block = block->lines.size() - line_index;
+
+            // Apply Widow/Orphan rules if the block gets split
+            if (fit_count < remaining_in_block) {
+                // Orphan control: If < 2 lines fit on the current page, push the whole block to next page
+                if (fit_count > 0 && fit_count < 2) {
+                    fit_count = 0;
+                }
+                // Widow control: If pushing the rest leaves < 2 lines on the next page (Widow),
+                // we pull one more line from the current page to the next page.
+                else if (fit_count > 0 && (remaining_in_block - fit_count) < 2) {
+                    fit_count -= 1;
+                    if (fit_count < 2) {
+                        fit_count = 0; // if taking 1 leaves the first page with < 2, just push everything
+                    }
+                }
+            }
+
+            // If no lines can fit, trigger a page break
+            if (fit_count == 0) {
+                if (!current_page->blocks.empty() || current_page_y.getValue() > column_start_y.getValue()) {
+                    if (current_column + 1 < total_columns) {
+                        current_column++;
+                        current_page_y = column_start_y;
+                    } else {
+                        pages.push_back(std::move(current_page));
+                        current_page = std::make_unique<PageBox>();
+                        current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+                        current_page_y = margins.top;
+                        column_start_y = margins.top;
+                        max_page_y = margins.top;
+                        current_column = 0;
+                    }
+                    continue; // Retry fitting on the clean page/column
+                } else {
+                    // Even on a fresh page, the line doesn't fit (maybe it's a huge line).
+                    // Force it to fit to avoid infinite loop.
+                    fit_count = 1;
+                }
+            }
+
+            // Create a paginated block holding the fitted lines
+            auto sub_block = std::make_unique<BlockBox>();
+            sub_block->alignment = block->alignment;
+            Twips sub_y(0);
+            for (size_t i = 0; i < fit_count; ++i) {
+                auto& line = block->lines[line_index + i];
+                line->setBounds({line->getBounds().x, sub_y, line->getBounds().width, line->getBounds().height});
+                sub_y = sub_y + line->getBounds().height;
+                sub_block->lines.push_back(std::move(line));
+            }
+            
+            Twips current_page_x = margins.left + Twips((column_width.getValue() + column_gap.getValue()) * current_column);
+            sub_block->setBounds({current_page_x, current_page_y, column_width, sub_y});
+            if (line_index == 0 && block->table) {
+                sub_block->table = std::move(block->table);
+            }
+            if (line_index == 0 && !block->images.empty()) {
+                sub_block->images = std::move(block->images);
+            }
+            if (line_index == 0 && block->drop_cap) {
+                sub_block->drop_cap = std::move(block->drop_cap);
+            }
+            sub_block->list_indent = block->list_indent;
+            if (line_index == 0) {
+                sub_block->list_marker = block->list_marker;
+            }
+            current_page->blocks.push_back(std::move(sub_block));
+            current_page_y = current_page_y + sub_y;
+            if (current_page_y.getValue() > max_page_y.getValue()) {
+                max_page_y = current_page_y;
+            }
+
+            line_index += fit_count;
+        }
+
+        if (spacing_after.getValue() > 0) {
+            current_page_y = current_page_y + spacing_after;
+        }
+    }
+
+    if (current_page) {
+        pages.push_back(std::move(current_page));
+    }
+
+    // Process headers and footers with page numbers
+    int total_pages = pages.size();
+    for (int i = 0; i < total_pages; ++i) {
+        if (!header_text.empty()) {
+            pages[i]->header_blocks = layoutHeaderFooter(header_text, i + 1, total_pages, page_size, margins);
+            Twips header_y = Twips(margins.top.getValue() / 2);
+            for (auto& b : pages[i]->header_blocks) {
+                b->setBounds({b->getBounds().x, header_y, b->getBounds().width, b->getBounds().height});
+                header_y = header_y + b->getBounds().height;
+                // Mark logical offsets as UINT32_MAX
+                for (auto& l : b->lines) {
+                    for (auto& r : l->runs) { r->logical_offset = UINT32_MAX; }
+                }
+            }
+        }
+        if (!footer_text.empty()) {
+            pages[i]->footer_blocks = layoutHeaderFooter(footer_text, i + 1, total_pages, page_size, margins);
+            Twips footer_y = Twips(page_size.height.getValue() - (margins.bottom.getValue() / 2));
+            for (auto& b : pages[i]->footer_blocks) {
+                b->setBounds({b->getBounds().x, footer_y, b->getBounds().width, b->getBounds().height});
+                footer_y = footer_y + b->getBounds().height;
+                for (auto& l : b->lines) {
+                    for (auto& r : l->runs) { r->logical_offset = UINT32_MAX; }
+                }
+            }
+        }
+    }
+
+    return pages;
+}
+
+std::vector<std::unique_ptr<BlockBox>> LayoutEngine::layoutHeaderFooter(
+    std::string_view text,
+    int page_num,
+    int total_pages,
+    PageSize page_size,
+    PageMargins margins
+) {
+    std::string processed(text);
+    
+    // Replace dynamic variables
+    auto replace_all = [](std::string& s, const std::string& from, const std::string& to) {
+        size_t start_pos = 0;
+        while((start_pos = s.find(from, start_pos)) != std::string::npos) {
+            s.replace(start_pos, from.length(), to);
+            start_pos += to.length();
+        }
+    };
+    
+    replace_all(processed, "{PAGE}", std::to_string(page_num));
+    replace_all(processed, "{NUMPAGES}", std::to_string(total_pages));
+    replace_all(processed, "{DATE}", "2026-05-24"); // Dummy date
+
+    FormatRegistry empty_registry;
+    PageMargins hf_margins = {margins.left, Twips(0), margins.right, Twips(0)};
+    PageSize hf_size = {page_size.width, Twips(5000)}; // Arbitrary height for HF
+    
+    // Recursive layout
+    auto pages = layoutText(processed, hf_size, hf_margins, empty_registry, "", "");
+    
+    std::vector<std::unique_ptr<BlockBox>> result;
+    if (!pages.empty() && pages[0]) {
+        for (auto& b : pages[0]->blocks) {
+            result.push_back(std::move(b));
+        }
+    }
+    return result;
+}
+
+} // namespace pluma

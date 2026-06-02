@@ -1,0 +1,113 @@
+#include <pluma/Plugins/PlumaArchiveExporter.hpp>
+#include <zip.h>
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <regex>
+#include <filesystem>
+
+using json = nlohmann::json;
+
+namespace pluma {
+namespace plugins {
+
+// Helper to convert PropertyValue variant to JSON
+struct PropertyValueToJson {
+    json operator()(const std::string& v) const { return v; }
+    json operator()(float v) const { return v; }
+    json operator()(uint16_t v) const { return v; }
+    json operator()(bool v) const { return v; }
+    json operator()(Color v) const { return v; }
+    json operator()(TextAlign v) const { return static_cast<int>(v); }
+    json operator()(VerticalAlign v) const { return static_cast<int>(v); }
+    json operator()(TextDecoration v) const { return static_cast<int>(v); }
+    json operator()(TextWrapMode v) const { return static_cast<int>(v); }
+    json operator()(int v) const { return v; }
+};
+
+std::string PlumaArchiveExporter::exportDoc(std::shared_ptr<DocumentSnapshot> /* snapshot */) {
+    return ""; // We only support binary file export
+}
+
+bool PlumaArchiveExporter::exportToFile(const std::string& filename, PlumaEditor& editor) {
+    int errorp = 0;
+    zip_t* archive = zip_open(filename.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &errorp);
+    if (!archive) {
+        return false;
+    }
+
+    // 1. Build document.json
+    json doc;
+    doc["version"] = "1.0";
+    
+    std::string text = editor.getText();
+    
+    // Parse images and add to zip
+    std::regex img_regex(R"(\|IMAGE:([^:]+):([^\|]+)\|)");
+    std::smatch match;
+    std::string modified_text = text;
+    int img_counter = 0;
+    
+    std::string search_text = text;
+    while (std::regex_search(search_text, match, img_regex)) {
+        std::string mode = match[1].str();
+        std::string original_path = match[2].str();
+        
+        // Only pack if it's not already packed
+        if (original_path.find("assets/") != 0) {
+            std::filesystem::path path_obj(original_path);
+            std::string ext = path_obj.extension().string();
+            std::string asset_name = "assets/img_" + std::to_string(img_counter++) + ext;
+            
+            // Add file to zip
+            zip_source_t* img_source = zip_source_file(archive, original_path.c_str(), 0, 0);
+            if (img_source) {
+                // Ensure assets directory exists in zip (implicit when adding file with path)
+                zip_file_add(archive, asset_name.c_str(), img_source, ZIP_FL_OVERWRITE);
+                
+                // Replace in text
+                std::string to_replace = "|IMAGE:" + mode + ":" + original_path + "|";
+                std::string replace_with = "|IMAGE:" + mode + ":" + asset_name + "|";
+                
+                size_t pos = modified_text.find(to_replace);
+                if (pos != std::string::npos) {
+                    modified_text.replace(pos, to_replace.length(), replace_with);
+                }
+            }
+        }
+        
+        search_text = match.suffix().str();
+    }
+    
+    doc["text"] = modified_text;
+    
+    json styles = json::array();
+    const auto& format_registry = editor.getFormatRegistry();
+    for (const auto& span : format_registry.getSpans()) {
+        const auto& bag = span.style;
+        for (const auto& [prop_id, prop_val] : bag.getAll()) {
+            json style_obj;
+            style_obj["start"] = span.start;
+            style_obj["length"] = span.length;
+            style_obj["propertyId"] = static_cast<int>(prop_id);
+            style_obj["value"] = std::visit(PropertyValueToJson{}, prop_val);
+            styles.push_back(style_obj);
+        }
+    }
+    doc["styles"] = styles;
+
+    std::string content = doc.dump(2);
+
+    // 2. Add document.json to zip
+    zip_source_t* source = zip_source_buffer(archive, content.c_str(), content.size(), 0);
+    if (source == nullptr || zip_file_add(archive, "document.json", source, ZIP_FL_OVERWRITE | ZIP_FL_ENC_UTF_8) < 0) {
+        if (source) zip_source_free(source);
+        zip_close(archive);
+        return false;
+    }
+
+    zip_close(archive);
+    return true;
+}
+
+} // namespace plugins
+} // namespace pluma

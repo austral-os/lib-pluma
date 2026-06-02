@@ -1,0 +1,26 @@
+# Doxyfile for lib-pluma
+
+# Project related configuration
+PROJECT_NAME           = "lib-pluma"
+PROJECT_BRIEF          = "A high-performance document composition engine for Wayland and Horizon OS"
+OUTPUT_DIRECTORY       = docs
+
+# Input directories
+INPUT                  = include src
+RECURSIVE              = YES
+
+# What to generate
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+
+# Extraction mode
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+
+# C++ Settings
+OPTIMIZE_OUTPUT_FOR_C  = NO
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES

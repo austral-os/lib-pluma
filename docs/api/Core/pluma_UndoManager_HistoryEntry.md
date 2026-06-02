@@ -1,0 +1,2 @@
+# Struct `pluma::UndoManager::HistoryEntry`
+

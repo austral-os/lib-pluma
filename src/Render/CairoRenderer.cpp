@@ -1,4 +1,6 @@
 #include <iostream>
+#include <unordered_map>
+#include <mutex>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -73,6 +75,10 @@ void CairoRenderer::drawGlyphRun(const Rect& rect, const ShapedTextRun& run, con
     cairo_restore(cr_);
 }
 
+static cairo_user_data_key_t stbi_data_key;
+static std::unordered_map<std::string, cairo_surface_t*> g_image_cache;
+static std::mutex g_cache_mutex;
+
 void CairoRenderer::drawImage(const Rect& rect, const std::string& path) {
     cairo_save(cr_);
     double x = twipsToPixels(rect.x);
@@ -80,38 +86,59 @@ void CairoRenderer::drawImage(const Rect& rect, const std::string& path) {
     double w = twipsToPixels(rect.width);
     double h = twipsToPixels(rect.height);
     
-    int img_w = 0, img_h = 0, channels = 0;
-    unsigned char* data = stbi_load(path.c_str(), &img_w, &img_h, &channels, 4);
     cairo_surface_t* image = nullptr;
     
-    if (data) {
-        // Cairo expects pre-multiplied ARGB32 (in native endianness, so BGRA in memory on Little Endian)
-        for (int i = 0; i < img_w * img_h * 4; i += 4) {
-            unsigned char r = data[i + 0];
-            unsigned char g = data[i + 1];
-            unsigned char b = data[i + 2];
-            unsigned char a = data[i + 3];
-            
-            // Pre-multiply alpha
-            if (a != 255) {
-                r = (r * a) / 255;
-                g = (g * a) / 255;
-                b = (b * a) / 255;
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        auto it = g_image_cache.find(path);
+        if (it != g_image_cache.end()) {
+            image = it->second;
+            cairo_surface_reference(image);
+        }
+    }
+    
+    if (!image) {
+        int img_w = 0, img_h = 0, channels = 0;
+        unsigned char* data = stbi_load(path.c_str(), &img_w, &img_h, &channels, 4);
+        
+        if (data) {
+            // Cairo expects pre-multiplied ARGB32 (in native endianness, so BGRA in memory on Little Endian)
+            for (int i = 0; i < img_w * img_h * 4; i += 4) {
+                unsigned char r = data[i + 0];
+                unsigned char g = data[i + 1];
+                unsigned char b = data[i + 2];
+                unsigned char a = data[i + 3];
+                
+                // Pre-multiply alpha
+                if (a != 255) {
+                    r = (r * a) / 255;
+                    g = (g * a) / 255;
+                    b = (b * a) / 255;
+                }
+                
+                // BGRA format for Cairo ARGB32
+                data[i + 0] = b;
+                data[i + 1] = g;
+                data[i + 2] = r;
+                data[i + 3] = a;
             }
             
-            // BGRA format for Cairo ARGB32
-            data[i + 0] = b;
-            data[i + 1] = g;
-            data[i + 2] = r;
-            data[i + 3] = a;
+            int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, img_w);
+            image = cairo_image_surface_create_for_data(data, CAIRO_FORMAT_ARGB32, img_w, img_h, stride);
+            
+            // Attach the data buffer to the surface so it gets freed when the surface is destroyed
+            cairo_surface_set_user_data(image, &stbi_data_key, data, (cairo_destroy_func_t)stbi_image_free);
+            
+            std::lock_guard<std::mutex> lock(g_cache_mutex);
+            g_image_cache[path] = image;
+            cairo_surface_reference(image); // Keep a reference for the cache
         }
-        
-        int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, img_w);
-        image = cairo_image_surface_create_for_data(data, CAIRO_FORMAT_ARGB32, img_w, img_h, stride);
     }
     
     if (image && cairo_surface_status(image) == CAIRO_STATUS_SUCCESS) {
         cairo_translate(cr_, x, y);
+        int img_w = cairo_image_surface_get_width(image);
+        int img_h = cairo_image_surface_get_height(image);
         cairo_scale(cr_, w / (double)img_w, h / (double)img_h);
         
         cairo_set_source_surface(cr_, image, 0, 0);
@@ -134,9 +161,7 @@ void CairoRenderer::drawImage(const Rect& rect, const std::string& path) {
     if (image) {
         cairo_surface_destroy(image);
     }
-    if (data) {
-        stbi_image_free(data);
-    }
+    
     cairo_restore(cr_);
 }
 

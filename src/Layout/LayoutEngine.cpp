@@ -5,8 +5,16 @@
 #include <string>
 #include <pluma/Typography/DummyTypography.hpp>
 #include "../Render/stb_image.h"
+#include <unordered_map>
+#include <mutex>
 
 namespace pluma {
+
+struct CachedImageInfo {
+    int w, h, comp;
+};
+static std::unordered_map<std::string, CachedImageInfo> g_info_cache;
+static std::mutex g_info_mutex;
 
 LayoutEngine::LayoutEngine(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font)
     : shaper_(std::move(shaper)), font_(std::move(default_font)) {}
@@ -481,7 +489,26 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     Twips img_w(3000), img_h(3000); // 200x200px approx fallback
                     
                     int real_w = 0, real_h = 0, comp = 0;
-                    if (stbi_info(image_path.c_str(), &real_w, &real_h, &comp) && real_w > 0 && real_h > 0) {
+                    bool has_info = false;
+                    {
+                        std::lock_guard<std::mutex> lock(g_info_mutex);
+                        auto it = g_info_cache.find(image_path);
+                        if (it != g_info_cache.end()) {
+                            real_w = it->second.w;
+                            real_h = it->second.h;
+                            comp = it->second.comp;
+                            has_info = true;
+                        }
+                    }
+                    if (!has_info) {
+                        if (stbi_info(image_path.c_str(), &real_w, &real_h, &comp)) {
+                            std::lock_guard<std::mutex> lock(g_info_mutex);
+                            g_info_cache[image_path] = {real_w, real_h, comp};
+                            has_info = true;
+                        }
+                    }
+                    
+                    if (has_info && real_w > 0 && real_h > 0) {
                         float aspect_ratio = static_cast<float>(real_h) / static_cast<float>(real_w);
                         // Default to 400px width (6000 twips), or less if the image is smaller
                         float target_width_px = std::min(400.0f, static_cast<float>(real_w));

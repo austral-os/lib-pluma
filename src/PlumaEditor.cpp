@@ -675,6 +675,27 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                     return true;
                 }
             }
+            
+            // InLine or TopAndBottom mode: Option A (Classic text drag).
+            // Resolve the logical offset at the current mouse position.
+            Twips dy = absolute_y - drag_start_y_;
+            Twips new_img_abs_y = drag_start_abs_img_y_ + dy;
+            Twips anchor_search_y = new_img_abs_y;
+            auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, anchor_search_y, page_gap_);
+            if (drop_offset_opt.has_value()) {
+                uint32_t new_offset = *drop_offset_opt;
+                std::string full_text = document_.getText();
+                while (new_offset > 0 && full_text[new_offset - 1] != '\n') {
+                    new_offset--;
+                }
+                
+                if (selection_.head != new_offset) {
+                    selection_.head = new_offset;
+                    selection_.anchor = new_offset;
+                    caret_blink_state_ = true; // Force caret visible while dragging
+                    updateLayout();
+                }
+            }
         }
         return true;
     }

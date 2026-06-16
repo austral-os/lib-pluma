@@ -133,6 +133,7 @@ public:
      * @param size The new page size.
      */
     void setPageSize(const PageSize& size);
+    PageSize getPageSize() const { return page_size_; }
 
     /**
      * @brief Sets the physical margins of the document page. Triggers a relayout.

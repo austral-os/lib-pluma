@@ -377,18 +377,80 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                     Twips doc_bottom = current_pages_.empty() ? Twips(0) : Twips(current_pages_.size() * (page_size_.height.getValue() + page_gap_.getValue()) + page_gap_.getValue() - page_margins_.bottom.getValue());
                     if (new_img_abs_y.getValue() < doc_top.getValue()) {
                         dy = doc_top - drag_start_abs_img_y_;
+                        new_img_abs_y = doc_top;
                     } else if ((new_img_abs_y + drag_start_img_height_).getValue() > doc_bottom.getValue()) {
                         dy = doc_bottom - drag_start_img_height_ - drag_start_abs_img_y_;
+                        new_img_abs_y = doc_bottom - drag_start_img_height_;
                     }
                     
-                    float new_image_x_pt = (drag_initial_w_ + dx).getValue() / 15.0f;
-                    float new_image_y_pt = (drag_initial_h_ + dy).getValue() / 15.0f;
-                    
-                    undo_manager_.beginTransaction();
-                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
-                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
-                    undo_manager_.commitTransaction();
-                    updateLayout();
+                    Twips anchor_search_y = new_img_abs_y;
+                    auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x_up, anchor_search_y, page_gap_);
+                    if (drop_offset_opt.has_value()) {
+                        uint32_t new_offset = *drop_offset_opt;
+                        
+                        std::string full_text = document_.getText();
+                        while (new_offset > 0 && full_text[new_offset - 1] != '\n') {
+                            new_offset--;
+                        }
+                        
+                        // Prevent dropping inside its own tag
+                        if (new_offset >= src_offset && new_offset <= src_offset + tag_len) {
+                            new_offset = src_offset; // stay in place
+                        }
+                        
+                        undo_manager_.beginTransaction();
+                        
+                        // Extract properties before deleting
+                        PropertyBag img_props = format_registry_.getStyleAt(src_offset);
+                        std::string img_tag = tag_content.substr(0, tag_len);
+                        
+                        if (new_offset != src_offset) {
+                            document_.remove(src_offset, tag_len);
+                            format_registry_.deleteText(src_offset, tag_len);
+                            
+                            if (new_offset > src_offset) {
+                                new_offset -= tag_len;
+                            }
+                            
+                            document_.insert(new_offset, img_tag);
+                            format_registry_.insertText(new_offset, tag_len);
+                            for (const auto& kv : img_props.getAll()) {
+                                format_registry_.applyStyle(new_offset, tag_len, kv.first, kv.second);
+                            }
+                        }
+                        
+                        // To compute ImageY, we need the new anchor paragraph's absolute Y.
+                        Twips new_block_abs_y(page_gap_);
+                        Twips current_page_y_search(page_gap_);
+                        for (const auto& page : current_pages_) {
+                            bool found = false;
+                            Twips current_block_y = current_page_y_search + page->getBounds().y;
+                            for (const auto& blk : page->blocks) {
+                                Twips block_abs_y = current_block_y + blk->getBounds().y;
+                                bool is_last_block = (&blk == &page->blocks.back());
+                                if (anchor_search_y.getValue() > (block_abs_y + blk->getBounds().height).getValue() && !is_last_block) {
+                                    continue;
+                                }
+                                new_block_abs_y = block_abs_y;
+                                found = true;
+                                break;
+                            }
+                            if (found) break;
+                            current_page_y_search = current_page_y_search + page->getBounds().height + page_gap_;
+                        }
+                        
+                        Twips new_img_y_relative = new_img_abs_y - new_block_abs_y;
+                        
+                        float new_image_x_pt = (drag_initial_w_ + dx).getValue() / 15.0f;
+                        float new_image_y_pt = new_img_y_relative.getValue() / 15.0f;
+                        
+                        format_registry_.applyStyle(new_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+                        format_registry_.applyStyle(new_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                        
+                        undo_manager_.commitTransaction();
+                        updateLayout();
+                        selection_.head = selection_.anchor = new_offset;
+                    }
                 }
             }
         }

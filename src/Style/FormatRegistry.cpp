@@ -3,6 +3,14 @@
 namespace pluma {
 
 void FormatRegistry::applyStyle(uint32_t start, uint32_t length, PropertyId id, PropertyValue value) {
+    // Try to update an existing exact-match span to avoid unbounded growth (e.g., during mouse drag)
+    for (auto it = spans_.rbegin(); it != spans_.rend(); ++it) {
+        if (it->start == start && it->length == length) {
+            it->style.set(id, value);
+            return;
+        }
+    }
+
     // Basic implementation: Just append the span.
     // In a real interval tree, this would split and merge spans.
     StyleSpan span;

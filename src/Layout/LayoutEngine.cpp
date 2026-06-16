@@ -5,6 +5,7 @@
 #include <string>
 #include <pluma/Typography/DummyTypography.hpp>
 #include "../Render/stb_image.h"
+#include <pluma/Render/ImageMask.hpp>
 #include <unordered_map>
 #include <mutex>
 
@@ -12,9 +13,11 @@ namespace pluma {
 
 struct CachedImageInfo {
     int w, h, comp;
+    std::shared_ptr<ImageMask> mask;
 };
-static std::unordered_map<std::string, CachedImageInfo> g_info_cache;
+
 static std::mutex g_info_mutex;
+static std::unordered_map<std::string, CachedImageInfo> g_info_cache;
 
 LayoutEngine::LayoutEngine(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font)
     : shaper_(std::move(shaper)), font_(std::move(default_font)) {}
@@ -85,6 +88,13 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     Twips float_left_w(0);
     Twips float_left_top(0);
     Twips float_left_bottom(0);
+    
+    struct ActiveImageMask {
+        Twips abs_x, abs_y;
+        Twips width, height;
+        std::shared_ptr<ImageMask> mask;
+    };
+    std::vector<ActiveImageMask> active_masks;
     
     std::vector<int> ol_counters(10, 0);
     int last_list_level = 0;
@@ -497,6 +507,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     
                     int real_w = 0, real_h = 0, comp = 0;
                     bool has_info = false;
+                    std::shared_ptr<ImageMask> mask;
+                    
                     {
                         std::lock_guard<std::mutex> lock(g_info_mutex);
                         auto it = g_info_cache.find(image_path);
@@ -504,14 +516,43 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             real_w = it->second.w;
                             real_h = it->second.h;
                             comp = it->second.comp;
+                            mask = it->second.mask;
                             has_info = true;
                         }
                     }
                     if (!has_info) {
-                        if (stbi_info(image_path.c_str(), &real_w, &real_h, &comp)) {
+                        unsigned char* data = stbi_load(image_path.c_str(), &real_w, &real_h, &comp, 4);
+                        if (data) {
+                            mask = std::make_shared<ImageMask>(real_w, real_h);
+                            for (int y = 0; y < real_h; ++y) {
+                                int start_x = -1;
+                                for (int x = 0; x < real_w; ++x) {
+                                    unsigned char alpha = data[(y * real_w + x) * 4 + 3];
+                                    if (alpha > 10) {
+                                        if (start_x == -1) start_x = x;
+                                    } else {
+                                        if (start_x != -1) {
+                                            mask->addSegment(y, start_x, x - 1);
+                                            start_x = -1;
+                                        }
+                                    }
+                                }
+                                if (start_x != -1) {
+                                    mask->addSegment(y, start_x, real_w - 1);
+                                }
+                            }
+                            stbi_image_free(data);
+                            
                             std::lock_guard<std::mutex> lock(g_info_mutex);
-                            g_info_cache[image_path] = {real_w, real_h, comp};
+                            g_info_cache[image_path] = {real_w, real_h, 4, mask};
                             has_info = true;
+                        } else {
+                            // Fallback to stbi_info if load fails for some reason
+                            if (stbi_info(image_path.c_str(), &real_w, &real_h, &comp)) {
+                                std::lock_guard<std::mutex> lock(g_info_mutex);
+                                g_info_cache[image_path] = {real_w, real_h, comp, nullptr};
+                                has_info = true;
+                            }
                         }
                     }
                     
@@ -561,13 +602,25 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         img->setBounds({x_pos, y_pos, img_w, img_h});
                         
                         if (x_pos.getValue() < (column_width.getValue() - img_w.getValue()) / 2) {
-                            float_left_w = x_pos + img_w + Twips(300);
-                            float_left_top = current_page_y + y_pos - Twips(150);
-                            float_left_bottom = current_page_y + y_pos + img_h + Twips(150);
+                            if ((mode == TextWrapMode::Tight || mode == TextWrapMode::Through) && mask) {
+                                active_masks.push_back({
+                                    x_pos, current_page_y + y_pos, img_w, img_h, mask
+                                });
+                            } else {
+                                float_left_w = x_pos + img_w + Twips(150); // Add horizontal margin (e.g. 150 twips = 10px)
+                                float_left_top = current_page_y + y_pos - Twips(75);
+                                float_left_bottom = current_page_y + y_pos + img_h + Twips(75);
+                            }
                         } else {
-                            float_right_w = column_width - x_pos + Twips(300);
-                            float_right_top = current_page_y + y_pos - Twips(150);
-                            float_right_bottom = current_page_y + y_pos + img_h + Twips(150);
+                            if ((mode == TextWrapMode::Tight || mode == TextWrapMode::Through) && mask) {
+                                active_masks.push_back({
+                                    x_pos, current_page_y + y_pos, img_w, img_h, mask
+                                });
+                            } else {
+                                float_right_w = column_width - x_pos + Twips(150);
+                                float_right_top = current_page_y + y_pos - Twips(75);
+                                float_right_bottom = current_page_y + y_pos + img_h + Twips(75);
+                            }
                         }
                     } else if (mode == TextWrapMode::InLine || mode == TextWrapMode::TopAndBottom) {
                         Twips x_offset(0);
@@ -684,6 +737,36 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             ShapedTextRun run = shaper_->shapeText(word, run_font);
             Twips word_width = run.total_width;
 
+            auto push_past_masks = [&](Twips& word_x, Twips y_top, Twips word_w, Twips word_h) {
+                bool moved = true;
+                while (moved) {
+                    moved = false;
+                    for (const auto& m : active_masks) {
+                        if (y_top.getValue() + word_h.getValue() > m.abs_y.getValue() && y_top.getValue() < m.abs_y.getValue() + m.height.getValue()) {
+                            int img_y1 = (y_top - m.abs_y).getValue() / 15;
+                            int img_y2 = (y_top + word_h - m.abs_y).getValue() / 15;
+                            int img_x1 = (word_x - m.abs_x).getValue() / 15;
+                            int img_x2 = (word_x + word_w - m.abs_x).getValue() / 15;
+                            
+                            if (img_x1 < m.mask->getWidth() && img_x2 >= 0) {
+                                if (m.mask->intersectsRect(img_y1, img_y2, img_x1, img_x2)) {
+                                    int img_w_px = img_x2 - img_x1 + 1;
+                                    int next_x_px = m.mask->findGap(img_y1, img_y2, img_x1, img_w_px);
+                                    if (next_x_px >= m.mask->getWidth() || next_x_px < 0) {
+                                        word_x = m.abs_x + m.width + Twips(150);
+                                    } else {
+                                        word_x = m.abs_x + Twips(next_x_px * 15);
+                                    }
+                                    moved = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            push_past_masks(current_x, current_page_y + current_y, word_width, Twips(240));
+
             Twips dynamic_content_width = column_width;
             if ((current_page_y + current_y + Twips(240)).getValue() > float_right_top.getValue() &&
                 (current_page_y + current_y).getValue() < float_right_bottom.getValue()) {
@@ -740,6 +823,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         (current_page_y + current_y).getValue() < float_right_bottom.getValue()) {
                         next_dynamic_content_width = column_width - float_right_w;
                     }
+                    
+                    push_past_masks(current_x, current_page_y + current_y, word_width, line_height);
+                    
                     available_width = Twips((next_dynamic_content_width - para_right_indent).getValue() - current_x.getValue());
                     if (available_width.getValue() < 0) available_width = Twips(0);
                 }

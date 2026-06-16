@@ -19,10 +19,6 @@ InputRouter::InputRouter() {
     // Default standard shortcuts
     registerShortcut(KEYSYM_Z, ModifierFlags::Control, EditorAction::Undo);
     registerShortcut(KEYSYM_Z, ModifierFlags::Control | ModifierFlags::Shift, EditorAction::Redo);
-    
-    registerShortcut(KEYSYM_C, ModifierFlags::Control, EditorAction::Copy);
-    registerShortcut(KEYSYM_V, ModifierFlags::Control, EditorAction::Paste);
-    registerShortcut(KEYSYM_X, ModifierFlags::Control, EditorAction::Cut);
 
     registerShortcut(KEYSYM_BACKSPACE, ModifierFlags::None, EditorAction::DeleteBackward);
     registerShortcut(KEYSYM_DELETE, ModifierFlags::None, EditorAction::DeleteForward);

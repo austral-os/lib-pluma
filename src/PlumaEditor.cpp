@@ -389,7 +389,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                         new_img_abs_y = doc_bottom - drag_start_img_height_;
                     }
                     
-                    Twips anchor_search_y = new_img_abs_y;
+                    Twips anchor_search_y = absolute_y_up;
                     auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x_up, anchor_search_y, page_gap_);
                     if (drop_offset_opt.has_value()) {
                         uint32_t new_offset = *drop_offset_opt;
@@ -400,7 +400,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                         }
                         
                         // Prevent dropping inside its own tag
-                        if (new_offset >= src_offset && new_offset <= src_offset + tag_len) {
+                        if (new_offset >= src_offset && new_offset < src_offset + tag_len) {
                             new_offset = src_offset; // stay in place
                         }
                         
@@ -678,9 +678,8 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             
             // InLine or TopAndBottom mode: Option A (Classic text drag).
             // Resolve the logical offset at the current mouse position.
-            Twips dy = absolute_y - drag_start_y_;
-            Twips new_img_abs_y = drag_start_abs_img_y_ + dy;
-            Twips anchor_search_y = new_img_abs_y;
+            // For Option A, the user expects the caret to follow their mouse pointer
+            Twips anchor_search_y = absolute_y;
             auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, anchor_search_y, page_gap_);
             if (drop_offset_opt.has_value()) {
                 uint32_t new_offset = *drop_offset_opt;

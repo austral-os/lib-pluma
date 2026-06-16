@@ -14,6 +14,7 @@ namespace pluma {
 struct CachedImageInfo {
     int w, h, comp;
     std::shared_ptr<ImageMask> mask;
+    std::shared_ptr<ImageMask> tight_mask;
 };
 
 static std::mutex g_info_mutex;
@@ -508,6 +509,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     int real_w = 0, real_h = 0, comp = 0;
                     bool has_info = false;
                     std::shared_ptr<ImageMask> mask;
+                    std::shared_ptr<ImageMask> tight_mask;
                     
                     {
                         std::lock_guard<std::mutex> lock(g_info_mutex);
@@ -517,6 +519,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             real_h = it->second.h;
                             comp = it->second.comp;
                             mask = it->second.mask;
+                            tight_mask = it->second.tight_mask;
                             has_info = true;
                         }
                     }
@@ -524,11 +527,17 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         unsigned char* data = stbi_load(image_path.c_str(), &real_w, &real_h, &comp, 4);
                         if (data) {
                             mask = std::make_shared<ImageMask>(real_w, real_h);
+                            tight_mask = std::make_shared<ImageMask>(real_w, real_h);
                             for (int y = 0; y < real_h; ++y) {
                                 int start_x = -1;
+                                int first_x = -1;
+                                int last_x = -1;
                                 for (int x = 0; x < real_w; ++x) {
                                     unsigned char alpha = data[(y * real_w + x) * 4 + 3];
                                     if (alpha > 10) {
+                                        if (first_x == -1) first_x = x;
+                                        last_x = x;
+                                        
                                         if (start_x == -1) start_x = x;
                                     } else {
                                         if (start_x != -1) {
@@ -540,17 +549,20 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                                 if (start_x != -1) {
                                     mask->addSegment(y, start_x, real_w - 1);
                                 }
+                                if (first_x != -1 && last_x != -1) {
+                                    tight_mask->addSegment(y, first_x, last_x);
+                                }
                             }
                             stbi_image_free(data);
                             
                             std::lock_guard<std::mutex> lock(g_info_mutex);
-                            g_info_cache[image_path] = {real_w, real_h, 4, mask};
+                            g_info_cache[image_path] = {real_w, real_h, 4, mask, tight_mask};
                             has_info = true;
                         } else {
                             // Fallback to stbi_info if load fails for some reason
                             if (stbi_info(image_path.c_str(), &real_w, &real_h, &comp)) {
                                 std::lock_guard<std::mutex> lock(g_info_mutex);
-                                g_info_cache[image_path] = {real_w, real_h, comp, nullptr};
+                                g_info_cache[image_path] = {real_w, real_h, comp, nullptr, nullptr};
                                 has_info = true;
                             }
                         }
@@ -603,8 +615,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         
                         if (x_pos.getValue() < (column_width.getValue() - img_w.getValue()) / 2) {
                             if ((mode == TextWrapMode::Tight || mode == TextWrapMode::Through) && mask) {
+                                auto chosen_mask = (mode == TextWrapMode::Tight) ? tight_mask : mask;
                                 active_masks.push_back({
-                                    x_pos, current_page_y + y_pos, img_w, img_h, mask
+                                    x_pos, current_page_y + y_pos, img_w, img_h, chosen_mask
                                 });
                             } else {
                                 float_left_w = x_pos + img_w + Twips(150); // Add horizontal margin (e.g. 150 twips = 10px)
@@ -613,8 +626,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             }
                         } else {
                             if ((mode == TextWrapMode::Tight || mode == TextWrapMode::Through) && mask) {
+                                auto chosen_mask = (mode == TextWrapMode::Tight) ? tight_mask : mask;
                                 active_masks.push_back({
-                                    x_pos, current_page_y + y_pos, img_w, img_h, mask
+                                    x_pos, current_page_y + y_pos, img_w, img_h, chosen_mask
                                 });
                             } else {
                                 float_right_w = column_width - x_pos + Twips(150);

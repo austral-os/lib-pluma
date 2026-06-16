@@ -372,6 +372,12 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                     Twips dx = absolute_x_up - drag_start_x_;
                     Twips dy = absolute_y_up - drag_start_y_;
                     
+                    if (std::abs(dx.getValue()) < 45 && std::abs(dy.getValue()) < 45) {
+                        drag_mode_ = DragMode::None;
+                        active_handle_ = ResizeHandle::None;
+                        return true;
+                    }
+                    
                     Twips new_img_abs_y = drag_start_abs_img_y_ + dy;
                     Twips doc_top = page_gap_ + page_margins_.top;
                     Twips doc_bottom = current_pages_.empty() ? Twips(0) : Twips(current_pages_.size() * (page_size_.height.getValue() + page_gap_.getValue()) + page_gap_.getValue() - page_margins_.bottom.getValue());
@@ -428,7 +434,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                             for (const auto& blk : page->blocks) {
                                 Twips block_abs_y = current_block_y + blk->getBounds().y;
                                 bool is_last_block = (&blk == &page->blocks.back());
-                                if (anchor_search_y.getValue() > (block_abs_y + blk->getBounds().height).getValue() && !is_last_block) {
+                                if (anchor_search_y.getValue() >= (block_abs_y + blk->getBounds().height).getValue() && !is_last_block) {
                                     continue;
                                 }
                                 new_block_abs_y = block_abs_y;

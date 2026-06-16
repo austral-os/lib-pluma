@@ -191,7 +191,7 @@ resolveClickInBlock(const BlockBox& block, Twips block_abs_x, Twips block_abs_y,
                         Twips cb_abs_y = cell_abs_y + cb->getBounds().y;
 
                         bool is_last_cb = (i == cell->blocks.size() - 1);
-                        if (y.getValue() > (cb_abs_y + cb->getBounds().height).getValue()
+                        if (y.getValue() >= (cb_abs_y + cb->getBounds().height).getValue()
                             && !is_last_cb)
                             continue;
 
@@ -242,7 +242,7 @@ resolveClickInBlock(const BlockBox& block, Twips block_abs_x, Twips block_abs_y,
                           + align_offset;
         Twips current_justify_offset(0);
 
-        if (y.getValue() > (line_abs_y + line->getBounds().height).getValue()
+        if (y.getValue() >= (line_abs_y + line->getBounds().height).getValue()
             && !is_last_line)
             continue;
 
@@ -253,7 +253,7 @@ resolveClickInBlock(const BlockBox& block, Twips block_abs_x, Twips block_abs_y,
             current_justify_offset = current_justify_offset + justify_gap;
 
             bool is_last_run = (r_idx == line->runs.size() - 1);
-            if (x.getValue() > (run_x + run_width).getValue() && !is_last_run)
+            if (x.getValue() >= (run_x + run_width).getValue() && !is_last_run)
                 continue;
 
             uint32_t char_index = 0;
@@ -268,6 +268,11 @@ resolveClickInBlock(const BlockBox& block, Twips block_abs_x, Twips block_abs_y,
             return run_box->logical_offset + char_index;
         }
     }
+    
+    if (block.lines.empty() && !block.images.empty()) {
+        return block.images.front()->logical_offset;
+    }
+    
     return std::nullopt;
 }
 
@@ -283,7 +288,7 @@ CaretResolver::resolvePhysicalToLogical(
     Twips current_page_y(page_gap);
     for (const auto& page : pages) {
         bool is_last_page = (&page == &pages.back());
-        if (y.getValue() > (current_page_y + page->getBounds().height + page_gap).getValue()
+        if (y.getValue() >= (current_page_y + page->getBounds().height + page_gap).getValue()
             && !is_last_page) {
             current_page_y = current_page_y + page->getBounds().height + page_gap;
             continue;
@@ -296,7 +301,7 @@ CaretResolver::resolvePhysicalToLogical(
             Twips block_abs_x = block->getBounds().x;
 
             bool is_last_block = (&block == &page->blocks.back());
-            if (y.getValue() > (block_abs_y + block->getBounds().height).getValue()
+            if (y.getValue() >= (block_abs_y + block->getBounds().height).getValue()
                 && !is_last_block)
                 continue;
 

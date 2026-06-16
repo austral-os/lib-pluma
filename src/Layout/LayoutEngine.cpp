@@ -94,6 +94,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         Twips abs_x, abs_y;
         Twips width, height;
         std::shared_ptr<ImageMask> mask;
+        int pad_px = 0;
     };
     std::vector<ActiveImageMask> active_masks;
     
@@ -617,7 +618,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             if ((mode == TextWrapMode::Tight || mode == TextWrapMode::Through) && mask) {
                                 auto chosen_mask = (mode == TextWrapMode::Tight) ? tight_mask : mask;
                                 active_masks.push_back({
-                                    x_pos, current_page_y + y_pos, img_w, img_h, chosen_mask
+                                    x_pos, current_page_y + y_pos, img_w, img_h, chosen_mask,
+                                    (mode == TextWrapMode::Tight) ? 8 : 0
                                 });
                             } else {
                                 float_left_w = x_pos + img_w + Twips(150); // Add horizontal margin (e.g. 150 twips = 10px)
@@ -628,7 +630,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             if ((mode == TextWrapMode::Tight || mode == TextWrapMode::Through) && mask) {
                                 auto chosen_mask = (mode == TextWrapMode::Tight) ? tight_mask : mask;
                                 active_masks.push_back({
-                                    x_pos, current_page_y + y_pos, img_w, img_h, chosen_mask
+                                    x_pos, current_page_y + y_pos, img_w, img_h, chosen_mask,
+                                    (mode == TextWrapMode::Tight) ? 8 : 0
                                 });
                             } else {
                                 float_right_w = column_width - x_pos + Twips(150);
@@ -757,10 +760,11 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     moved = false;
                     for (const auto& m : active_masks) {
                         if (y_top.getValue() + word_h.getValue() > m.abs_y.getValue() && y_top.getValue() < m.abs_y.getValue() + m.height.getValue()) {
-                            int img_y1 = (y_top - m.abs_y).getValue() / 15;
-                            int img_y2 = (y_top + word_h - m.abs_y).getValue() / 15;
-                            int img_x1 = (word_x - m.abs_x).getValue() / 15;
-                            int img_x2 = (word_x + word_w - m.abs_x).getValue() / 15;
+                            int pad = m.pad_px;
+                            int img_y1 = (y_top - m.abs_y).getValue() / 15 - pad;
+                            int img_y2 = (y_top + word_h - m.abs_y).getValue() / 15 + pad;
+                            int img_x1 = (word_x - m.abs_x).getValue() / 15 - pad;
+                            int img_x2 = (word_x + word_w - m.abs_x).getValue() / 15 + pad;
                             
                             if (img_x1 < m.mask->getWidth() && img_x2 >= 0) {
                                 if (m.mask->intersectsRect(img_y1, img_y2, img_x1, img_x2)) {
@@ -769,7 +773,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                                     if (next_x_px >= m.mask->getWidth() || next_x_px < 0) {
                                         word_x = m.abs_x + m.width + Twips(150);
                                     } else {
-                                        word_x = m.abs_x + Twips(next_x_px * 15);
+                                        word_x = m.abs_x + Twips((next_x_px + pad) * 15);
                                     }
                                     moved = true;
                                 }

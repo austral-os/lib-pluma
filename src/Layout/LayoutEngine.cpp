@@ -79,6 +79,11 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     int current_column = 0;
     Twips column_gap(300); // Approx 20px
     
+    Twips float_right_w(0);
+    Twips float_right_bottom(0);
+    Twips float_left_w(0);
+    Twips float_left_bottom(0);
+    
     std::vector<int> ol_counters(10, 0);
     int last_list_level = 0;
 
@@ -531,9 +536,35 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     if (auto id_val = img_style.get(PropertyId::ImageId)) img->image_id = std::get<std::string>(*id_val);
                     if (auto title_val = img_style.get(PropertyId::ImageTitle)) img->title = std::get<std::string>(*title_val);
                     
+                    if (auto wrap_val = img_style.get(PropertyId::ImageWrapMode)) {
+                        mode = std::get<TextWrapMode>(*wrap_val);
+                    }
+                    img->wrap_mode = mode; // Keep the img struct consistent
+                    
                     if (mode == TextWrapMode::Square || mode == TextWrapMode::Tight || mode == TextWrapMode::Through) {
-                        img->setBounds({content_width - img_w, current_y, img_w, img_h});
-                        content_width = content_width - img_w - Twips(300); // reduce text width for this block
+                        Twips x_pos = column_width - img_w; // Default right
+                        if (auto x_val = img_style.get(PropertyId::ImageX)) {
+                            x_pos = Twips(std::get<float>(*x_val) * 15.0f);
+                        }
+                        Twips y_pos = current_y; // Default to current paragraph top
+                        if (auto y_val = img_style.get(PropertyId::ImageY)) {
+                            y_pos = Twips(std::get<float>(*y_val) * 15.0f);
+                        }
+                        
+                        if (x_pos.getValue() < 0) x_pos = Twips(0);
+                        if (x_pos.getValue() > column_width.getValue() - img_w.getValue()) {
+                            x_pos = column_width - img_w;
+                        }
+
+                        img->setBounds({x_pos, y_pos, img_w, img_h});
+                        
+                        if (x_pos.getValue() < (column_width.getValue() - img_w.getValue()) / 2) {
+                            float_left_w = x_pos + img_w + Twips(300);
+                            float_left_bottom = current_page_y + y_pos + img_h + Twips(150);
+                        } else {
+                            float_right_w = column_width - x_pos + Twips(300);
+                            float_right_bottom = current_page_y + y_pos + img_h + Twips(150);
+                        }
                     } else if (mode == TextWrapMode::InLine || mode == TextWrapMode::TopAndBottom) {
                         Twips x_offset(0);
                         if (block->alignment == TextAlign::Center) {
@@ -593,6 +624,11 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 
                 drop_cap->run = std::move(dc_run);
                 drop_cap->style = std::move(dc_style);
+                
+                // Track dropcap as a left float
+                float_left_w = Twips(std::max(float_left_w.getValue(), (dropcap_width + Twips(100)).getValue()));
+                float_left_bottom = Twips(std::max(float_left_bottom.getValue(), (current_page_y + current_y + dropcap_height).getValue()));
+                
                 drop_cap->logical_text = first_char;
                 drop_cap->logical_offset = logical_offset_base + logical_offset + start - 1;
                 drop_cap->setBounds({para_left_indent + para_first_indent, current_y, dropcap_width, dropcap_height});
@@ -635,10 +671,24 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             ShapedTextRun run = shaper_->shapeText(word, run_font);
             Twips word_width = run.total_width;
 
-            Twips available_width = Twips((content_width - para_right_indent).getValue() - current_x.getValue());
+            Twips dynamic_content_width = column_width;
+            if ((current_page_y + current_y).getValue() < float_right_bottom.getValue()) {
+                dynamic_content_width = column_width - float_right_w;
+            }
+            Twips available_width = Twips((dynamic_content_width - para_right_indent).getValue() - current_x.getValue());
             if (available_width.getValue() < 0) available_width = Twips(0);
 
             if (word_width.getValue() > available_width.getValue()) {
+                Twips base_x = block->list_indent + para_left_indent;
+                if ((current_page_y + current_y).getValue() < float_left_bottom.getValue()) {
+                    if (float_left_w.getValue() > base_x.getValue()) {
+                        base_x = float_left_w;
+                    }
+                }
+                if (current_x.getValue() < base_x.getValue()) {
+                    current_x = base_x;
+                }
+
                 if (current_x.getValue() > (block->list_indent + para_left_indent).getValue()) {
                     Twips line_height = Twips(240); // 12pt approx
                     for (const auto& r : current_line->runs) {
@@ -657,13 +707,23 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
 
                     current_line = std::make_unique<LineBox>();
                     current_y = current_y + line_height;
-                    if (drop_cap_lines > 0 && current_y.getValue() < dropcap_height.getValue()) {
-                        current_x = dropcap_width + Twips(100) + para_left_indent;
-                    } else {
-                        current_x = block->list_indent + para_left_indent;
-                    }
                     
-                    available_width = Twips((content_width - para_right_indent).getValue() - current_x.getValue());
+                    Twips base_x = block->list_indent + para_left_indent;
+                    if (drop_cap_lines > 0 && current_y.getValue() < dropcap_height.getValue()) {
+                        base_x = dropcap_width + Twips(100) + para_left_indent;
+                    }
+                    if ((current_page_y + current_y).getValue() < float_left_bottom.getValue()) {
+                        if (float_left_w.getValue() > base_x.getValue()) {
+                            base_x = float_left_w;
+                        }
+                    }
+                    current_x = base_x;
+                    
+                    Twips next_dynamic_content_width = column_width;
+                    if ((current_page_y + current_y).getValue() < float_right_bottom.getValue()) {
+                        next_dynamic_content_width = column_width - float_right_w;
+                    }
+                    available_width = Twips((next_dynamic_content_width - para_right_indent).getValue() - current_x.getValue());
                     if (available_width.getValue() < 0) available_width = Twips(0);
                 }
 

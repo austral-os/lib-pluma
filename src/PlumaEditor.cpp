@@ -185,7 +185,14 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                 if (img_rect.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
                     selected_image_offset_ = img->logical_offset;
                     selection_.head = selection_.anchor = img->logical_offset;
-                    drag_mode_ = DragMode::None;
+                    drag_mode_ = DragMode::ImageMove;
+                    drag_start_x_ = absolute_x;
+                    drag_start_y_ = absolute_y;
+                    // Store image's content-relative position (NOT abs which includes margins/page_gap)
+                    drag_initial_w_ = img->getBounds().x;  // ImageX: block-relative
+                    drag_initial_h_ = img->getBounds().y;  // ImageY: block-relative
+                    drag_start_abs_img_y_ = img_abs_y;
+                    drag_start_img_height_ = img->getBounds().height;
                     updateLayout();
                     return true;
                 }
@@ -285,6 +292,107 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
 bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlags mods) {
     (void)x; (void)y; (void)mods;
     if (button == MouseButton::Left) {
+        if (drag_mode_ == DragMode::ImageMove && selected_image_offset_.has_value()) {
+            uint32_t src_offset = *selected_image_offset_;
+            uint32_t dest_offset = selection_.head;
+
+            if (src_offset != dest_offset) {
+                std::string doc_text = document_.getText();
+                std::string tag_content = doc_text.substr(src_offset);
+                size_t end_idx = tag_content.find("|", 1);
+                if (end_idx != std::string::npos && end_idx > 6 && tag_content.substr(0, 7) == "|IMAGE:") {
+                    uint32_t tag_len = end_idx + 1;
+                    std::string img_tag = tag_content.substr(0, tag_len);
+                    
+                    uint32_t actual_src = src_offset;
+                    uint32_t actual_len = tag_len;
+                    
+                    if (actual_src + actual_len < doc_text.length() && doc_text[actual_src + actual_len] == ' ') {
+                        actual_len++;
+                    }
+                    if (actual_src > 0 && doc_text[actual_src - 1] == '\n' && 
+                        actual_src + actual_len < doc_text.length() && doc_text[actual_src + actual_len] == '\n') {
+                        actual_len++;
+                    }
+                    
+                    PropertyBag bag = format_registry_.getStyleAt(src_offset);
+
+                    undo_manager_.beginTransaction();
+                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(actual_src, actual_len));
+                    format_registry_.deleteText(actual_src, actual_len);
+
+                    if (dest_offset > actual_src) {
+                        if (dest_offset >= actual_src + actual_len) {
+                            dest_offset -= actual_len;
+                        } else {
+                            dest_offset = actual_src;
+                        }
+                    }
+
+                    std::string new_doc_text = document_.getText();
+                    uint32_t para_start = dest_offset;
+                    while (para_start > 0 && new_doc_text[para_start - 1] != '\n') {
+                        para_start--;
+                    }
+                    dest_offset = para_start;
+                    
+                    Twips absolute_x = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
+                    Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
+                    Twips relative_x = absolute_x - page_x;
+                    float new_image_x_pt = relative_x.getValue() / 15.0f;
+                    
+                    std::string to_insert = img_tag;
+                    uint32_t tag_offset = dest_offset;
+
+                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(dest_offset, to_insert));
+                    format_registry_.insertText(dest_offset, to_insert.length());
+
+                    for (auto& [prop_id, prop_val] : bag.getAll()) {
+                        format_registry_.applyStyle(tag_offset, tag_len, prop_id, prop_val);
+                    }
+                    format_registry_.applyStyle(tag_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+
+                    undo_manager_.commitTransaction();
+
+                    selected_image_offset_ = tag_offset;
+                    selection_.anchor = selection_.head = tag_offset;
+                    updateLayout();
+                    updateCursorState();
+                }
+            } else {
+                std::string doc_text = document_.getText();
+                std::string tag_content = doc_text.substr(src_offset);
+                size_t end_idx = tag_content.find("|", 1);
+                if (end_idx != std::string::npos && end_idx > 6 && tag_content.substr(0, 7) == "|IMAGE:") {
+                    uint32_t tag_len = end_idx + 1;
+                    Twips absolute_x_up = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
+                    Twips absolute_y_up = Twips(static_cast<int32_t>(y * 15.0)) + viewport_y_;
+                    Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
+                    absolute_x_up = absolute_x_up - page_x;
+                    Twips dx = absolute_x_up - drag_start_x_;
+                    Twips dy = absolute_y_up - drag_start_y_;
+                    
+                    Twips new_img_abs_y = drag_start_abs_img_y_ + dy;
+                    Twips doc_top = page_gap_ + page_margins_.top;
+                    Twips doc_bottom = current_pages_.empty() ? Twips(0) : Twips(current_pages_.size() * (page_size_.height.getValue() + page_gap_.getValue()) + page_gap_.getValue() - page_margins_.bottom.getValue());
+                    if (new_img_abs_y.getValue() < doc_top.getValue()) {
+                        dy = doc_top - drag_start_abs_img_y_;
+                    } else if ((new_img_abs_y + drag_start_img_height_).getValue() > doc_bottom.getValue()) {
+                        dy = doc_bottom - drag_start_img_height_ - drag_start_abs_img_y_;
+                    }
+                    
+                    float new_image_x_pt = (drag_initial_w_ + dx).getValue() / 15.0f;
+                    float new_image_y_pt = (drag_initial_h_ + dy).getValue() / 15.0f;
+                    
+                    undo_manager_.beginTransaction();
+                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                    undo_manager_.commitTransaction();
+                    updateLayout();
+                }
+            }
+        }
+
         drag_mode_ = DragMode::None;
         active_handle_ = ResizeHandle::None;
         return true;
@@ -462,6 +570,44 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
         }
 
         updateLayout();
+        return true;
+    }
+
+    if (drag_mode_ == DragMode::ImageMove && selected_image_offset_.has_value()) {
+        uint32_t src_offset = *selected_image_offset_;
+        std::string doc_text = document_.getText();
+        std::string tag_content = doc_text.substr(src_offset);
+        size_t end_idx = tag_content.find("|", 1);
+        if (end_idx != std::string::npos && end_idx > 6 && tag_content.substr(0, 7) == "|IMAGE:") {
+            uint32_t tag_len = end_idx + 1;
+            PropertyBag bag = format_registry_.getStyleAt(src_offset);
+            if (auto wrap_val = bag.get(PropertyId::ImageWrapMode)) {
+                auto mode = std::get<TextWrapMode>(*wrap_val);
+                if (mode == TextWrapMode::Square || mode == TextWrapMode::Tight || mode == TextWrapMode::Through) {
+                    // Delta-based: new_pos = initial_img_content_pos + mouse_delta
+                    Twips dx = absolute_x - drag_start_x_;
+                    Twips dy = absolute_y - drag_start_y_;
+                    
+                    Twips new_img_abs_y = drag_start_abs_img_y_ + dy;
+                    Twips doc_top = page_gap_ + page_margins_.top;
+                    Twips doc_bottom = current_pages_.empty() ? Twips(0) : Twips(current_pages_.size() * (page_size_.height.getValue() + page_gap_.getValue()) + page_gap_.getValue() - page_margins_.bottom.getValue());
+                    if (new_img_abs_y.getValue() < doc_top.getValue()) {
+                        dy = doc_top - drag_start_abs_img_y_;
+                    } else if ((new_img_abs_y + drag_start_img_height_).getValue() > doc_bottom.getValue()) {
+                        dy = doc_bottom - drag_start_img_height_ - drag_start_abs_img_y_;
+                    }
+
+                    Twips new_img_x = drag_initial_w_ + dx;
+                    Twips new_img_y = drag_initial_h_ + dy;
+                    float new_image_x_pt = new_img_x.getValue() / 15.0f;
+                    float new_image_y_pt = new_img_y.getValue() / 15.0f;
+                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                    updateLayout();
+                    return true;
+                }
+            }
+        }
         return true;
     }
 

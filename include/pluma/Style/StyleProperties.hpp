@@ -78,7 +78,9 @@ enum class PropertyId {
     ImageHeight,
     ImageId,
     ImageTitle,
-    DropCapLines
+    DropCapLines,
+    ImageX,
+    ImageY
 };
 
 using Color = uint32_t; ///< Format: ARGB
@@ -143,6 +145,8 @@ inline bool inheritsByDefault(PropertyId id) {
         case PropertyId::ImageId:
         case PropertyId::ImageTitle:
         case PropertyId::DropCapLines:
+        case PropertyId::ImageX:
+        case PropertyId::ImageY:
             return false;
         default:
             return false;

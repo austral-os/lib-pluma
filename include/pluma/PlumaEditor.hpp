@@ -56,6 +56,7 @@ enum class DragMode {
     None, 
     Text, 
     ImageResize,
+    ImageMove,
     TableColResize,
     TableRowResize
 };
@@ -426,6 +427,9 @@ private:
     std::optional<uint32_t> selected_image_offset_;
     Twips drag_start_x_{0}, drag_start_y_{0};
     Twips drag_initial_w_{0}, drag_initial_h_{0};
+    Twips drag_start_abs_img_y_{0};
+    Twips drag_start_img_height_{0};
+
     
     std::optional<uint32_t> active_table_offset_;
     int active_table_col_{-1};

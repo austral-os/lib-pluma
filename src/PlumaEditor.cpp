@@ -2204,4 +2204,276 @@ void PlumaEditor::mergeTableCells() {
     table_selection_.end_row = -1;
 }
 
+void PlumaEditor::splitTableCells(bool horizontally) {
+    if (!active_table_offset_.has_value()) return;
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    int num_cols = std::stoi(text.substr(pos, pipe_pos - pos));
+
+    size_t para_start = table_start;
+    int current_row = -1;
+    int current_col = -1;
+    
+    std::vector<int> active_rowspans(num_cols, 0);
+
+    struct CellData {
+        size_t start_offset;
+        size_t end_offset;
+        std::string content;
+        int row;
+        int col;
+        int colspan;
+        int rowspan;
+        bool is_target;
+    };
+    
+    std::vector<CellData> cells;
+    std::vector<size_t> row_offsets;
+    
+    size_t cell_start = 0;
+    std::string cell_content = "";
+    int cell_row = -1;
+    int cell_col = -1;
+    int cell_colspan = 1;
+    int cell_rowspan = 1;
+    
+    int target_row = active_table_row_;
+    int target_col = active_table_col_;
+    if (table_selection_.mode == TableSelectionMode::Cell) {
+        target_row = std::min(table_selection_.row, table_selection_.end_row);
+        target_col = std::min(table_selection_.col, table_selection_.end_col);
+    }
+    
+    auto flush_cell = [&](size_t offset) {
+        if (cell_row >= 0 && cell_col >= 0) {
+            bool target = (cell_row == target_row && cell_col == target_col);
+            cells.push_back({cell_start, offset, cell_content, cell_row, cell_col, cell_colspan, cell_rowspan, target});
+        }
+        cell_row = -1;
+        cell_col = -1;
+        cell_content = "";
+    };
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            flush_cell(para_start);
+            row_offsets.push_back(para_start);
+            current_row++;
+            current_col = 0;
+            for (int& rs : active_rowspans) if (rs > 0) rs--;
+            while (current_col < num_cols && active_rowspans[current_col] > 0) current_col++;
+        } else if (para == "|CEL|" || (para.length() > 5 && para.substr(0, 5) == "|CEL:")) {
+            flush_cell(para_start);
+            
+            cell_start = para_start;
+            cell_row = current_row;
+            cell_col = current_col;
+            cell_colspan = 1;
+            cell_rowspan = 1;
+            
+            size_t c_pos = para.find("colspan=");
+            if (c_pos != std::string::npos) cell_colspan = std::stoi(para.substr(c_pos + 8));
+            size_t r_pos = para.find("rowspan=");
+            if (r_pos != std::string::npos) cell_rowspan = std::stoi(para.substr(r_pos + 8));
+            
+            current_col += cell_colspan;
+            while (current_col < num_cols && active_rowspans[current_col] > 0) current_col++;
+            
+            if (cell_rowspan > 1) {
+                for (int i = 0; i < cell_colspan && (cell_col + i) < num_cols; ++i) {
+                    active_rowspans[cell_col + i] = cell_rowspan;
+                }
+            }
+        } else if (para == "|ENDTBL|") {
+            flush_cell(para_start);
+            break;
+        } else {
+            if (cell_row >= 0 && cell_col >= 0) {
+                if (para_start > cell_start) {
+                    if (cell_content.length() > 0) cell_content += "\n";
+                    cell_content += para;
+                }
+            }
+        }
+        para_start = para_end + 1;
+    }
+    
+    CellData* target = nullptr;
+    for (auto& c : cells) {
+        if (c.is_target) {
+            target = &c;
+            break;
+        }
+    }
+    
+    if (!target) return;
+    
+    undo_manager_.beginTransaction();
+    
+    if (horizontally) {
+        if (target->colspan >= 2) {
+            int left_colspan = target->colspan / 2;
+            int right_colspan = target->colspan - left_colspan;
+            
+            size_t len = target->end_offset - target->start_offset;
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(target->start_offset, len));
+            format_registry_.deleteText(target->start_offset, len);
+            
+            std::string new_cells = "|CEL";
+            if (left_colspan > 1) new_cells += ":colspan=" + std::to_string(left_colspan);
+            if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
+            new_cells += "|\n";
+            if (!target->content.empty()) new_cells += target->content + "\n";
+            else new_cells += "\n";
+            
+            new_cells += "|CEL";
+            if (right_colspan > 1) new_cells += ":colspan=" + std::to_string(right_colspan);
+            if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
+            new_cells += "|\n\n";
+            
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target->start_offset, new_cells));
+            format_registry_.insertText(target->start_offset, new_cells.length());
+            
+        } else {
+            for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
+                bool intersects = (target->col >= it->col && target->col < it->col + it->colspan);
+                if (intersects && !it->is_target) {
+                    size_t len = it->end_offset - it->start_offset;
+                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    format_registry_.deleteText(it->start_offset, len);
+                    
+                    std::string new_cel = "|CEL:colspan=" + std::to_string(it->colspan + 1);
+                    if (it->rowspan > 1) new_cel += ":rowspan=" + std::to_string(it->rowspan);
+                    new_cel += "|\n";
+                    if (!it->content.empty()) new_cel += it->content + "\n";
+                    else new_cel += "\n";
+                    
+                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel));
+                    format_registry_.insertText(it->start_offset, new_cel.length());
+                } else if (it->is_target) {
+                    size_t len = it->end_offset - it->start_offset;
+                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    format_registry_.deleteText(it->start_offset, len);
+                    
+                    std::string new_cells = "|CEL";
+                    if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
+                    new_cells += "|\n";
+                    if (!target->content.empty()) new_cells += target->content + "\n";
+                    else new_cells += "\n";
+                    
+                    new_cells += "|CEL";
+                    if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
+                    new_cells += "|\n\n";
+                    
+                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cells));
+                    format_registry_.insertText(it->start_offset, new_cells.length());
+                }
+            }
+            std::string old_num_str = std::to_string(num_cols);
+            std::string new_num_str = std::to_string(num_cols + 1);
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+            format_registry_.deleteText(pos, old_num_str.length());
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
+            format_registry_.insertText(pos, new_num_str.length());
+        }
+    } else {
+        if (target->rowspan >= 2) {
+            int top_rowspan = target->rowspan / 2;
+            int bottom_rowspan = target->rowspan - top_rowspan;
+            
+            int insert_row_idx = target->row + top_rowspan;
+            size_t insert_offset = 0;
+            if (static_cast<size_t>(insert_row_idx + 1) < row_offsets.size()) {
+                insert_offset = row_offsets[insert_row_idx + 1];
+            } else {
+                insert_offset = text.find("|ENDTBL|", table_start);
+            }
+            
+            std::string new_bottom = "|CEL";
+            if (target->colspan > 1) new_bottom += ":colspan=" + std::to_string(target->colspan);
+            if (bottom_rowspan > 1) new_bottom += ":rowspan=" + std::to_string(bottom_rowspan);
+            new_bottom += "|\n\n";
+            
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_offset, new_bottom));
+            format_registry_.insertText(insert_offset, new_bottom.length());
+
+            size_t len = target->end_offset - target->start_offset;
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(target->start_offset, len));
+            format_registry_.deleteText(target->start_offset, len);
+            
+            std::string new_top = "|CEL";
+            if (target->colspan > 1) new_top += ":colspan=" + std::to_string(target->colspan);
+            if (top_rowspan > 1) new_top += ":rowspan=" + std::to_string(top_rowspan);
+            new_top += "|\n";
+            if (!target->content.empty()) new_top += target->content + "\n";
+            else new_top += "\n";
+            
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target->start_offset, new_top));
+            format_registry_.insertText(target->start_offset, new_top.length());
+            
+        } else {
+            size_t insert_offset = 0;
+            if (static_cast<size_t>(target->row + 1) < row_offsets.size()) {
+                insert_offset = row_offsets[target->row + 1];
+            } else {
+                insert_offset = text.find("|ENDTBL|", table_start);
+            }
+            
+            std::string new_row = "|ROW|\n|CEL";
+            if (target->colspan > 1) new_row += ":colspan=" + std::to_string(target->colspan);
+            new_row += "|\n\n";
+            
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_offset, new_row));
+            format_registry_.insertText(insert_offset, new_row.length());
+
+            for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
+                bool intersects = (target->row >= it->row && target->row < it->row + it->rowspan);
+                if (intersects && !it->is_target) {
+                    size_t len = it->end_offset - it->start_offset;
+                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    format_registry_.deleteText(it->start_offset, len);
+                    
+                    std::string new_cel = "|CEL";
+                    if (it->colspan > 1) new_cel += ":colspan=" + std::to_string(it->colspan);
+                    new_cel += ":rowspan=" + std::to_string(it->rowspan + 1);
+                    new_cel += "|\n";
+                    if (!it->content.empty()) new_cel += it->content + "\n";
+                    else new_cel += "\n";
+                    
+                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel));
+                    format_registry_.insertText(it->start_offset, new_cel.length());
+                } else if (it->is_target) {
+                    size_t len = it->end_offset - it->start_offset;
+                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    format_registry_.deleteText(it->start_offset, len);
+                    
+                    std::string new_cells = "|CEL";
+                    if (target->colspan > 1) new_cells += ":colspan=" + std::to_string(target->colspan);
+                    new_cells += "|\n";
+                    if (!target->content.empty()) new_cells += target->content + "\n";
+                    else new_cells += "\n";
+                    
+                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cells));
+                    format_registry_.insertText(it->start_offset, new_cells.length());
+                }
+            }
+        }
+    }
+    
+    undo_manager_.commitTransaction();
+    updateLayout();
+    
+    table_selection_.mode = TableSelectionMode::None;
+    table_selection_.end_col = -1;
+    table_selection_.end_row = -1;
+}
 } // namespace pluma

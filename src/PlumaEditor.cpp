@@ -159,7 +159,6 @@ std::tuple<TableBox*, int, int> PlumaEditor::findTableCellAt(Twips absolute_x, T
                 Twips table_abs_y = block_absolute_y + block->table->getBounds().y;
                 int row_idx = 0;
                 for (const auto& row : block->table->rows) {
-                    int col_idx = 0;
                     for (const auto& cell : row->cells) {
                         Twips cell_x = table_abs_x + cell->getBounds().x;
                         Twips cell_y = table_abs_y + row->getBounds().y;
@@ -170,9 +169,8 @@ std::tuple<TableBox*, int, int> PlumaEditor::findTableCellAt(Twips absolute_x, T
                         if (cell_rect.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
                             auto nested = self(self, cell->blocks, cell_x, cell_y);
                             if (std::get<0>(nested) != nullptr) return nested;
-                            return {block->table.get(), row_idx, col_idx};
+                            return {block->table.get(), row_idx, cell->col_idx};
                         }
-                        col_idx++;
                     }
                     row_idx++;
                 }
@@ -1295,7 +1293,6 @@ void PlumaEditor::render(IRenderer& renderer) {
     renderTable = [&](const std::unique_ptr<TableBox>& table, Twips table_abs_x, Twips table_abs_y) {
         int row_idx = 0;
         for (const auto& row : table->rows) {
-            int col_idx = 0;
             for (const auto& cell : row->cells) {
                 Twips cx = table_abs_x + cell->getBounds().x;
                 Twips cy = table_abs_y + row->getBounds().y;
@@ -1328,12 +1325,12 @@ void PlumaEditor::render(IRenderer& renderer) {
                         int r2 = table_selection_.end_row != -1 ? table_selection_.end_row : r1;
                         int c2 = table_selection_.end_col != -1 ? table_selection_.end_col : c1;
                         if (row_idx >= std::min(r1, r2) && row_idx <= std::max(r1, r2) &&
-                            col_idx >= std::min(c1, c2) && col_idx <= std::max(c1, c2)) {
+                            cell->col_idx >= std::min(c1, c2) && cell->col_idx <= std::max(c1, c2)) {
                             is_selected = true;
                         }
                     }
                     else if (table_selection_.mode == TableSelectionMode::Row && table_selection_.row == row_idx) is_selected = true;
-                    else if (table_selection_.mode == TableSelectionMode::Column && table_selection_.col == col_idx) is_selected = true;
+                    else if (table_selection_.mode == TableSelectionMode::Column && table_selection_.col == cell->col_idx) is_selected = true;
                 }
                 
                 if (is_selected) {
@@ -1414,7 +1411,6 @@ void PlumaEditor::render(IRenderer& renderer) {
                         renderTable(cell_block->table, cx + cell_block->getBounds().x, cy + cell_block->getBounds().y);
                     }
                 }
-                col_idx++;
             }
             row_idx++;
         }

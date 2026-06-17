@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cmath>
 
 #include <pluma/Layout/LayoutEngine.hpp>
 #include <sstream>
@@ -761,19 +762,35 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     for (const auto& m : active_masks) {
                         if (y_top.getValue() + word_h.getValue() > m.abs_y.getValue() && y_top.getValue() < m.abs_y.getValue() + m.height.getValue()) {
                             int pad = m.pad_px;
-                            int img_y1 = (y_top - m.abs_y).getValue() / 15 - pad;
-                            int img_y2 = (y_top + word_h - m.abs_y).getValue() / 15 + pad;
-                            int img_x1 = (word_x - m.abs_x).getValue() / 15 - pad;
-                            int img_x2 = (word_x + word_w - m.abs_x).getValue() / 15 + pad;
+                            
+                            float layout_w_px = std::max(1.0f, m.width.getValue() / 15.0f);
+                            float layout_h_px = std::max(1.0f, m.height.getValue() / 15.0f);
+                            
+                            float scale_x = static_cast<float>(m.mask->getWidth()) / layout_w_px;
+                            float scale_y = static_cast<float>(m.mask->getHeight()) / layout_h_px;
+                            
+                            int layout_y1 = (y_top - m.abs_y).getValue() / 15 - pad;
+                            int layout_y2 = (y_top + word_h - m.abs_y).getValue() / 15 + pad;
+                            int layout_x1 = (word_x - m.abs_x).getValue() / 15 - pad;
+                            int layout_x2 = (word_x + word_w - m.abs_x).getValue() / 15 + pad;
+                            
+                            int img_y1 = static_cast<int>(layout_y1 * scale_y);
+                            int img_y2 = static_cast<int>(layout_y2 * scale_y);
+                            int img_x1 = static_cast<int>(layout_x1 * scale_x);
+                            int img_x2 = static_cast<int>(layout_x2 * scale_x);
                             
                             if (img_x1 < m.mask->getWidth() && img_x2 >= 0) {
                                 if (m.mask->intersectsRect(img_y1, img_y2, img_x1, img_x2)) {
                                     int img_w_px = img_x2 - img_x1 + 1;
-                                    int next_x_px = m.mask->findGap(img_y1, img_y2, img_x1, img_w_px);
-                                    if (next_x_px >= m.mask->getWidth() || next_x_px < 0) {
+                                    int next_x_px_mask = m.mask->findGap(img_y1, img_y2, img_x1, img_w_px);
+                                    if (next_x_px_mask >= m.mask->getWidth() || next_x_px_mask < 0) {
                                         word_x = m.abs_x + m.width + Twips(150);
                                     } else {
-                                        word_x = m.abs_x + Twips((next_x_px + pad) * 15);
+                                        int next_x_px_layout = static_cast<int>(std::ceil(next_x_px_mask / scale_x));
+                                        if (next_x_px_layout <= layout_x1) {
+                                            next_x_px_layout = layout_x1 + 1;
+                                        }
+                                        word_x = m.abs_x + Twips((next_x_px_layout + pad) * 15);
                                     }
                                     moved = true;
                                 }

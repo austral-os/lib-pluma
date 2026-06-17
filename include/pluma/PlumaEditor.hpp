@@ -249,6 +249,8 @@ public:
     void insertTableRowBelow();
     void insertTableColumnLeft();
     void insertTableColumnRight();
+    
+    void mergeTableCells();
 
     void selectTableColumn(uint32_t table_offset, int col) {
         table_selection_.mode = TableSelectionMode::Column;

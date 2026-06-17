@@ -130,6 +130,10 @@ public:
     BoxType getType() const override { return BoxType::TableCell; }
 
     std::vector<std::unique_ptr<BlockBox>> blocks; ///< Blocks inside the cell
+    
+    int colspan = 1;
+    int rowspan = 1;
+    int col_idx = 0;
 };
 
 /**

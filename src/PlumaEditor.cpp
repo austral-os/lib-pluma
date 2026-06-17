@@ -1809,7 +1809,7 @@ void PlumaEditor::updateCursorState() {
         if (state.logical_offset < text_str.length()) {
             if (text_str.substr(state.logical_offset, 7) == "|IMAGE:") {
                 state.object_type = CursorObjectType::Image;
-            } else if (text_str.substr(state.logical_offset, 5) == "|CEL|") {
+            } else if (text_str.substr(state.logical_offset, 5) == "|CEL|" || text_str.substr(state.logical_offset, 5) == "|CEL:") {
                 state.object_type = CursorObjectType::TableCell;
             } else {
                 state.object_type = CursorObjectType::Text;
@@ -1944,7 +1944,7 @@ void PlumaEditor::insertTableColumnLeft() {
             }
             row_idx++;
             col_idx = -1;
-        } else if (para == "|CEL|") {
+        } else if (para == "|CEL|" || (para.length() > 5 && para.substr(0, 5) == "|CEL:")) {
             col_idx++;
             if (col_idx == active_table_col_) {
                 insert_offsets.push_back(para_start);
@@ -2009,7 +2009,7 @@ void PlumaEditor::insertTableColumnRight() {
             }
             row_idx++;
             col_idx = -1;
-        } else if (para == "|CEL|") {
+        } else if (para == "|CEL|" || (para.length() > 5 && para.substr(0, 5) == "|CEL:")) {
             col_idx++;
             if (col_idx == active_table_col_ + 1) {
                 insert_offsets.push_back(para_start);
@@ -2044,6 +2044,168 @@ void PlumaEditor::insertTableColumnRight() {
         undo_manager_.commitTransaction();
         updateLayout();
     }
+}
+
+void PlumaEditor::mergeTableCells() {
+    if (table_selection_.mode != TableSelectionMode::Cell || table_selection_.end_row == -1) return;
+    
+    int min_row = std::min(table_selection_.row, table_selection_.end_row);
+    int max_row = std::max(table_selection_.row, table_selection_.end_row);
+    int min_col = std::min(table_selection_.col, table_selection_.end_col);
+    int max_col = std::max(table_selection_.col, table_selection_.end_col);
+    
+    if (min_row == max_row && min_col == max_col) return; // Need at least 2 cells to merge
+    
+    if (!active_table_offset_.has_value()) return;
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    int num_cols = std::stoi(text.substr(pos, pipe_pos - pos));
+
+    size_t para_start = table_start;
+    int current_row = -1;
+    int current_col = -1;
+    
+    std::vector<int> active_rowspans(num_cols, 0);
+
+    struct CellData {
+        size_t start_offset;
+        size_t end_offset;
+        std::string content;
+        int row;
+        int col;
+        int colspan;
+        int rowspan;
+        bool is_target;
+        bool is_merged;
+    };
+    
+    std::vector<CellData> cells;
+    
+    size_t cell_start = 0;
+    std::string cell_content = "";
+    int cell_row = -1;
+    int cell_col = -1;
+    int cell_colspan = 1;
+    int cell_rowspan = 1;
+    
+    auto flush_cell = [&](size_t offset) {
+        if (cell_row >= 0 && cell_col >= 0) {
+            bool target = (cell_row == min_row && cell_col == min_col);
+            bool merged = (cell_row >= min_row && cell_row <= max_row && cell_col >= min_col && cell_col <= max_col);
+            cells.push_back({cell_start, offset, cell_content, cell_row, cell_col, cell_colspan, cell_rowspan, target, merged});
+        }
+        cell_row = -1;
+        cell_col = -1;
+        cell_content = "";
+    };
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            flush_cell(para_start);
+            current_row++;
+            current_col = 0;
+            for (int& rs : active_rowspans) if (rs > 0) rs--;
+            while (current_col < num_cols && active_rowspans[current_col] > 0) current_col++;
+        } else if (para == "|CEL|" || (para.length() > 5 && para.substr(0, 5) == "|CEL:")) {
+            flush_cell(para_start);
+            
+            cell_start = para_start;
+            cell_row = current_row;
+            cell_col = current_col;
+            cell_colspan = 1;
+            cell_rowspan = 1;
+            
+            size_t c_pos = para.find("colspan=");
+            if (c_pos != std::string::npos) cell_colspan = std::stoi(para.substr(c_pos + 8));
+            size_t r_pos = para.find("rowspan=");
+            if (r_pos != std::string::npos) cell_rowspan = std::stoi(para.substr(r_pos + 8));
+            
+            current_col += cell_colspan;
+            while (current_col < num_cols && active_rowspans[current_col] > 0) current_col++;
+            
+            if (cell_rowspan > 1) {
+                for (int i = 0; i < cell_colspan && (cell_col + i) < num_cols; ++i) {
+                    active_rowspans[cell_col + i] = cell_rowspan;
+                }
+            }
+        } else if (para == "|ENDTBL|") {
+            flush_cell(para_start);
+            break;
+        } else {
+            if (cell_row >= 0 && cell_col >= 0) {
+                if (para_start > cell_start) {
+                    if (cell_content.length() > 0) cell_content += "\n";
+                    cell_content += para;
+                }
+            }
+        }
+        para_start = para_end + 1;
+    }
+
+    std::string combined_content;
+    bool target_found = false;
+    CellData target_cell;
+    
+    for (auto& c : cells) {
+        if (c.is_merged) {
+            if (!combined_content.empty() && !c.content.empty()) {
+                combined_content += "\n";
+            }
+            if (!c.content.empty()) {
+                combined_content += c.content;
+            }
+            if (c.is_target) {
+                target_found = true;
+                target_cell = c;
+            }
+        }
+    }
+    
+    if (!target_found) return;
+
+    undo_manager_.beginTransaction();
+
+    for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
+        if (it->is_merged && !it->is_target) {
+            size_t len = it->end_offset - it->start_offset;
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+            format_registry_.deleteText(it->start_offset, len);
+        } else if (it->is_target) {
+            size_t len = it->end_offset - it->start_offset;
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+            format_registry_.deleteText(it->start_offset, len);
+            
+            int new_colspan = target_cell.colspan + (max_col - min_col);
+            int new_rowspan = target_cell.rowspan + (max_row - min_row);
+            
+            std::string new_cel_tag = "|CEL";
+            if (new_colspan > 1) new_cel_tag += ":colspan=" + std::to_string(new_colspan);
+            if (new_rowspan > 1) new_cel_tag += ":rowspan=" + std::to_string(new_rowspan);
+            new_cel_tag += "|\n";
+            
+            if (!combined_content.empty()) {
+                new_cel_tag += combined_content + "\n";
+            }
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel_tag));
+            format_registry_.insertText(it->start_offset, new_cel_tag.length());
+        }
+    }
+    
+    undo_manager_.commitTransaction();
+    updateLayout();
+    
+    table_selection_.mode = TableSelectionMode::None;
+    table_selection_.end_col = -1;
+    table_selection_.end_row = -1;
 }
 
 } // namespace pluma

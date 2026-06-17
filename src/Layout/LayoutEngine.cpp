@@ -113,6 +113,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     uint32_t cell_offset_base = 0;
     int table_cols = 1;
     std::vector<Twips> table_col_widths;
+    std::vector<int> active_rowspans;
     int col_idx = 0;
     int table_depth = 0;
 
@@ -334,6 +335,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 for (int i = 0; i < missing; ++i) table_col_widths.push_back(per_missing);
             }
             
+            active_rowspans.assign(table_cols, 0);
+            
             col_idx = 0;
             logical_offset += para.length() + 1;
             continue;
@@ -350,12 +353,16 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 }
                 if (current_cell) {
                     if (true) {
-                        Twips cell_width = (static_cast<size_t>(col_idx) < table_col_widths.size()) ? table_col_widths[col_idx] : Twips(content_width.getValue() / table_cols);
+                        Twips cell_width(0);
+                        int span = current_cell->colspan;
+                        for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
+                            cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
+                        }
                         auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
-                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)}); // arbitrary height for now
+                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
                     }
                     if (current_row) current_row->cells.push_back(std::move(current_cell));
                 }
@@ -363,11 +370,22 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 current_row = std::make_unique<TableRowBox>();
                 current_cell.reset();
                 col_idx = 0;
+                
+                // Decrement rowspans
+                for (int& rs : active_rowspans) {
+                    if (rs > 0) rs--;
+                }
+                
+                // Skip columns that are occupied by rowspan from above
+                while (col_idx < table_cols && active_rowspans[col_idx] > 0) {
+                    col_idx++;
+                }
+
                 cell_first_para = true;
                 logical_offset += para.length() + 1;
                 continue;
             }
-            if (para == "|CEL|") {
+            if (para == "|CEL|" || (para.length() > 5 && para.substr(0, 5) == "|CEL:")) {
                 if (table_depth > 1) {
                     if (!cell_first_para) cell_buffer += "\n";
                     cell_buffer += para;
@@ -377,7 +395,12 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 }
                 if (current_cell) {
                     if (true) {
-                        Twips cell_width = (static_cast<size_t>(col_idx) < table_col_widths.size()) ? table_col_widths[col_idx] : Twips(content_width.getValue() / table_cols);
+                        Twips cell_width(0);
+                        int span = current_cell->colspan;
+                        for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
+                            cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
+                        }
+                        
                         auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
@@ -385,9 +408,32 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
                     }
                     if (current_row) current_row->cells.push_back(std::move(current_cell));
+                    
+                    // Advance col_idx for the next cell
+                    if (current_row && !current_row->cells.empty()) {
+                        col_idx += current_row->cells.back()->colspan;
+                        while (col_idx < table_cols && active_rowspans[col_idx] > 0) {
+                            col_idx++;
+                        }
+                    }
                 }
+                
                 current_cell = std::make_unique<TableCellBox>();
-                if (current_row && !current_row->cells.empty()) col_idx++;
+                current_cell->col_idx = col_idx;
+                
+                // Parse colspan and rowspan
+                size_t c_pos = para.find("colspan=");
+                if (c_pos != std::string::npos) current_cell->colspan = std::stoi(para.substr(c_pos + 8));
+                size_t r_pos = para.find("rowspan=");
+                if (r_pos != std::string::npos) current_cell->rowspan = std::stoi(para.substr(r_pos + 8));
+                
+                // Register our rowspan
+                if (current_cell->rowspan > 1) {
+                    for (int i = 0; i < current_cell->colspan && (current_cell->col_idx + i) < table_cols; ++i) {
+                        active_rowspans[current_cell->col_idx + i] = current_cell->rowspan;
+                    }
+                }
+                
                 cell_buffer.clear();
                 cell_first_para = true;
                 logical_offset += para.length() + 1;
@@ -405,7 +451,12 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 }
                 if (current_cell) {
                     if (true) {
-                        Twips cell_width = (static_cast<size_t>(col_idx) < table_col_widths.size()) ? table_col_widths[col_idx] : Twips(content_width.getValue() / table_cols);
+                        Twips cell_width(0);
+                        int span = current_cell->colspan;
+                        for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
+                            cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
+                        }
+                        
                         auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
@@ -424,10 +475,12 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 Twips table_height(0);
                 for (auto& row : current_table->rows) {
                     Twips max_h(0);
-                    Twips current_x(0);
                     for (auto& cell : row->cells) {
+                        Twips current_x(0);
+                        for (int i = 0; i < cell->col_idx && static_cast<size_t>(i) < table_col_widths.size(); ++i) {
+                            current_x = current_x + table_col_widths[i];
+                        }
                         cell->setBounds({current_x, Twips(0), cell->getBounds().width, cell->getBounds().height});
-                        current_x = current_x + cell->getBounds().width;
                         // Calculate real cell height
                         Twips cell_h(120);
                         if (!cell->blocks.empty()) {

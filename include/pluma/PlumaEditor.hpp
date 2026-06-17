@@ -245,6 +245,11 @@ public:
         selected_image_offset_ = offset;
     }
     
+    void insertTableRowAbove();
+    void insertTableRowBelow();
+    void insertTableColumnLeft();
+    void insertTableColumnRight();
+
     void selectTableColumn(uint32_t table_offset, int col) {
         table_selection_.mode = TableSelectionMode::Column;
         table_selection_.table_offset = table_offset;

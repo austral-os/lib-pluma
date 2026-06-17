@@ -1801,6 +1801,8 @@ void PlumaEditor::updateCursorState() {
         else if (table_selection_.mode == TableSelectionMode::Row) state.object_type = CursorObjectType::TableRow;
         else if (table_selection_.mode == TableSelectionMode::Column) state.object_type = CursorObjectType::TableColumn;
         else state.object_type = CursorObjectType::Table;
+    } else if (active_table_offset_.has_value()) {
+        state.object_type = CursorObjectType::TableCell;
     } else {
         // Simple heuristic: check the text at cursor
         std::string text_str = document_.getText();
@@ -1819,6 +1821,228 @@ void PlumaEditor::updateCursorState() {
 
     if (cursor_state_callback_) {
         cursor_state_callback_(state);
+    }
+}
+
+void PlumaEditor::insertTableRowAbove() {
+    if (!active_table_offset_.has_value()) return;
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    int num_cols = std::stoi(text.substr(pos, pipe_pos - pos));
+
+    size_t para_start = table_start;
+    int row_idx = -1;
+    uint32_t target_offset = 0;
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            row_idx++;
+            if (row_idx == active_table_row_) {
+                target_offset = para_start;
+                break;
+            }
+        } else if (para == "|ENDTBL|") {
+            break;
+        }
+        para_start = para_end + 1;
+    }
+
+    if (target_offset > 0) {
+        std::string new_row = "|ROW|\n";
+        for (int i=0; i<num_cols; i++) new_row += "|CEL|\n\n";
+        
+        undo_manager_.beginTransaction();
+        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target_offset, new_row));
+        format_registry_.insertText(target_offset, new_row.length());
+        undo_manager_.commitTransaction();
+        active_table_row_++; // cursor moves down relative to the new row
+        updateLayout();
+    }
+}
+
+void PlumaEditor::insertTableRowBelow() {
+    if (!active_table_offset_.has_value()) return;
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    int num_cols = std::stoi(text.substr(pos, pipe_pos - pos));
+
+    size_t para_start = table_start;
+    int row_idx = -1;
+    uint32_t target_offset = 0;
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            row_idx++;
+            if (row_idx == active_table_row_ + 1) {
+                target_offset = para_start;
+                break;
+            }
+        } else if (para == "|ENDTBL|") {
+            if (row_idx == active_table_row_) {
+                target_offset = para_start;
+            }
+            break;
+        }
+        para_start = para_end + 1;
+    }
+
+    if (target_offset > 0) {
+        std::string new_row = "|ROW|\n";
+        for (int i=0; i<num_cols; i++) new_row += "|CEL|\n\n";
+        
+        undo_manager_.beginTransaction();
+        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target_offset, new_row));
+        format_registry_.insertText(target_offset, new_row.length());
+        undo_manager_.commitTransaction();
+        updateLayout();
+    }
+}
+
+void PlumaEditor::insertTableColumnLeft() {
+    if (!active_table_offset_.has_value()) return;
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    int num_cols = std::stoi(text.substr(pos, pipe_pos - pos));
+
+    size_t para_start = table_start;
+    int row_idx = -1;
+    int col_idx = -1;
+    std::vector<uint32_t> insert_offsets;
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            if (row_idx >= 0 && col_idx < active_table_col_) {
+                // If the row had fewer cells for some reason and we wanted to insert at the end
+                if (active_table_col_ == col_idx + 1) insert_offsets.push_back(para_start);
+            }
+            row_idx++;
+            col_idx = -1;
+        } else if (para == "|CEL|") {
+            col_idx++;
+            if (col_idx == active_table_col_) {
+                insert_offsets.push_back(para_start);
+            }
+        } else if (para == "|ENDTBL|") {
+            if (row_idx >= 0 && col_idx < active_table_col_) {
+                if (active_table_col_ == col_idx + 1) insert_offsets.push_back(para_start);
+            }
+            break;
+        }
+        para_start = para_end + 1;
+    }
+
+    if (!insert_offsets.empty()) {
+        undo_manager_.beginTransaction();
+        
+        // Reverse order to avoid shifting offsets
+        for (auto it = insert_offsets.rbegin(); it != insert_offsets.rend(); ++it) {
+            std::string new_cel = "|CEL|\n\n";
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(*it, new_cel));
+            format_registry_.insertText(*it, new_cel.length());
+        }
+        
+        // Update col count
+        std::string old_num_str = std::to_string(num_cols);
+        std::string new_num_str = std::to_string(num_cols + 1);
+        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+        format_registry_.deleteText(pos, old_num_str.length());
+        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
+        format_registry_.insertText(pos, new_num_str.length());
+        
+        undo_manager_.commitTransaction();
+        active_table_col_++; // cursor moves right relative to the new column
+        updateLayout();
+    }
+}
+
+void PlumaEditor::insertTableColumnRight() {
+    if (!active_table_offset_.has_value()) return;
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    int num_cols = std::stoi(text.substr(pos, pipe_pos - pos));
+
+    size_t para_start = table_start;
+    int row_idx = -1;
+    int col_idx = -1;
+    std::vector<uint32_t> insert_offsets;
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            if (row_idx >= 0 && col_idx == active_table_col_) {
+                insert_offsets.push_back(para_start);
+            }
+            row_idx++;
+            col_idx = -1;
+        } else if (para == "|CEL|") {
+            col_idx++;
+            if (col_idx == active_table_col_ + 1) {
+                insert_offsets.push_back(para_start);
+            }
+        } else if (para == "|ENDTBL|") {
+            if (row_idx >= 0 && col_idx == active_table_col_) {
+                insert_offsets.push_back(para_start);
+            }
+            break;
+        }
+        para_start = para_end + 1;
+    }
+
+    if (!insert_offsets.empty()) {
+        undo_manager_.beginTransaction();
+        
+        // Reverse order to avoid shifting offsets
+        for (auto it = insert_offsets.rbegin(); it != insert_offsets.rend(); ++it) {
+            std::string new_cel = "|CEL|\n\n";
+            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(*it, new_cel));
+            format_registry_.insertText(*it, new_cel.length());
+        }
+        
+        // Update col count
+        std::string old_num_str = std::to_string(num_cols);
+        std::string new_num_str = std::to_string(num_cols + 1);
+        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+        format_registry_.deleteText(pos, old_num_str.length());
+        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
+        format_registry_.insertText(pos, new_num_str.length());
+        
+        undo_manager_.commitTransaction();
+        updateLayout();
     }
 }
 

@@ -252,6 +252,7 @@ public:
     
     void mergeTableCells();
     void splitTableCells(bool horizontally = true);
+    void splitTable();
 
     void selectTableColumn(uint32_t table_offset, int col) {
         table_selection_.mode = TableSelectionMode::Column;

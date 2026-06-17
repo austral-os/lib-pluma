@@ -2476,4 +2476,98 @@ void PlumaEditor::splitTableCells(bool horizontally) {
     table_selection_.end_col = -1;
     table_selection_.end_row = -1;
 }
+
+void PlumaEditor::splitTable() {
+    if (!active_table_offset_.has_value()) return;
+    if (active_table_row_ <= 0) return; // Cannot split at the first row
+    
+    std::string text = document_.getText();
+    uint32_t table_start = *active_table_offset_;
+    if (text.substr(table_start, 10) != "|TBL:cols=") return;
+
+    size_t pos = table_start + 10;
+    size_t pipe_pos = text.find('|', pos);
+    if (pipe_pos == std::string::npos) return;
+    std::string cols_str = text.substr(pos, pipe_pos - pos);
+    int num_cols = std::stoi(cols_str);
+
+    size_t para_start = table_start;
+    int current_row = -1;
+    int current_col = -1;
+    
+    std::vector<int> active_rowspans(num_cols, 0);
+    
+    size_t target_row_offset = 0;
+    bool found_target_row = false;
+
+    while (para_start < text.length()) {
+        size_t para_end = text.find('\n', para_start);
+        if (para_end == std::string::npos) para_end = text.length();
+        std::string para = text.substr(para_start, para_end - para_start);
+        
+        if (para == "|ROW|") {
+            current_row++;
+            current_col = 0;
+            
+            if (current_row == active_table_row_) {
+                // Check if there are active rowspans crossing into this row
+                bool has_spans = false;
+                for (int rs : active_rowspans) {
+                    if (rs > 1) { // rs > 1 means it crosses into this row (before decrement)
+                        has_spans = true;
+                        break;
+                    }
+                }
+                if (has_spans) {
+                    // Cannot safely split here, rowspans cross the boundary
+                    return;
+                }
+                
+                target_row_offset = para_start;
+                found_target_row = true;
+                break;
+            }
+            
+            for (int& rs : active_rowspans) if (rs > 0) rs--;
+            while (current_col < num_cols && active_rowspans[current_col] > 0) current_col++;
+        } else if (para == "|CEL|" || (para.length() > 5 && para.substr(0, 5) == "|CEL:")) {
+            int cell_colspan = 1;
+            int cell_rowspan = 1;
+            
+            size_t c_pos = para.find("colspan=");
+            if (c_pos != std::string::npos) cell_colspan = std::stoi(para.substr(c_pos + 8));
+            size_t r_pos = para.find("rowspan=");
+            if (r_pos != std::string::npos) cell_rowspan = std::stoi(para.substr(r_pos + 8));
+            
+            current_col += cell_colspan;
+            while (current_col < num_cols && active_rowspans[current_col] > 0) current_col++;
+            
+            if (cell_rowspan > 1) {
+                for (int i = 0; i < cell_colspan && (current_col - cell_colspan + i) < num_cols; ++i) {
+                    active_rowspans[current_col - cell_colspan + i] = cell_rowspan;
+                }
+            }
+        } else if (para == "|ENDTBL|") {
+            break;
+        }
+        
+        para_start = para_end;
+        if (para_start < text.length() && text[para_start] == '\n') para_start++;
+    }
+
+    if (!found_target_row) return;
+
+    undo_manager_.beginTransaction();
+    std::string insertion = "|ENDTBL|\n\n|TBL:cols=" + cols_str + "|\n";
+    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target_row_offset, insertion));
+    format_registry_.insertText(target_row_offset, insertion.length());
+    undo_manager_.commitTransaction();
+
+    updateLayout();
+    
+    table_selection_.mode = TableSelectionMode::None;
+    table_selection_.end_col = -1;
+    table_selection_.end_row = -1;
+}
+
 } // namespace pluma

@@ -58,7 +58,8 @@ enum class DragMode {
     ImageResize,
     ImageMove,
     TableColResize,
-    TableRowResize
+    TableRowResize,
+    TableCellSelection
 };
 
 enum class TableSelectionMode {
@@ -74,6 +75,8 @@ struct TableSelection {
     uint32_t table_offset{0};
     int row{-1};
     int col{-1};
+    int end_row{-1};
+    int end_col{-1};
 };
 
 enum class ResizeHandle { 
@@ -339,6 +342,12 @@ public:
      * @param renderer The target renderer interface.
      */
     void render(IRenderer& renderer);
+
+    /**
+     * @brief Finds the table cell at the given absolute coordinates.
+     * @return A tuple of (TableBox*, row_idx, col_idx). Returns (nullptr, -1, -1) if no cell is found.
+     */
+    std::tuple<TableBox*, int, int> findTableCellAt(Twips absolute_x, Twips absolute_y) const;
 
     /**
      * @brief Exposes the text for test assertions.

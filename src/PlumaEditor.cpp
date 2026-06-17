@@ -147,6 +147,49 @@ void PlumaEditor::onTextInput(const std::string& text) {
     input_router_.handleTextInput(text);
 }
 
+std::tuple<TableBox*, int, int> PlumaEditor::findTableCellAt(Twips absolute_x, Twips absolute_y) const {
+    Twips current_page_y(page_gap_);
+    auto find_in_blocks = [&](auto& self, const std::vector<std::unique_ptr<BlockBox>>& blocks, Twips base_x, Twips base_y) -> std::tuple<TableBox*, int, int> {
+        for (const auto& block : blocks) {
+            Twips block_absolute_y = base_y + block->getBounds().y;
+            Twips block_absolute_x = base_x + block->getBounds().x;
+            
+            if (block->table) {
+                Twips table_abs_x = block_absolute_x + block->table->getBounds().x;
+                Twips table_abs_y = block_absolute_y + block->table->getBounds().y;
+                int row_idx = 0;
+                for (const auto& row : block->table->rows) {
+                    int col_idx = 0;
+                    for (const auto& cell : row->cells) {
+                        Twips cell_x = table_abs_x + cell->getBounds().x;
+                        Twips cell_y = table_abs_y + row->getBounds().y;
+                        Twips cell_w = cell->getBounds().width;
+                        Twips cell_h = cell->getBounds().height;
+                        
+                        Rect cell_rect{cell_x, cell_y, cell_w, cell_h};
+                        if (cell_rect.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
+                            auto nested = self(self, cell->blocks, cell_x, cell_y);
+                            if (std::get<0>(nested) != nullptr) return nested;
+                            return {block->table.get(), row_idx, col_idx};
+                        }
+                        col_idx++;
+                    }
+                    row_idx++;
+                }
+            }
+        }
+        return {nullptr, -1, -1};
+    };
+
+    for (const auto& page : current_pages_) {
+        auto result = find_in_blocks(find_in_blocks, page->blocks, Twips(0), current_page_y);
+        if (std::get<0>(result) != nullptr) return result;
+        current_page_y = current_page_y + page->getBounds().height + page_gap_;
+    }
+    return {nullptr, -1, -1};
+}
+
+
 bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFlags mods) {
     if (button != MouseButton::Left) return false;
 
@@ -273,6 +316,16 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
     selected_image_offset_ = std::nullopt;
     drag_mode_ = DragMode::Text;
     table_selection_.mode = TableSelectionMode::None; // Clear structural selection when clicking outside handlers
+
+    auto cell_opt = findTableCellAt(absolute_x, absolute_y);
+    if (std::get<0>(cell_opt) != nullptr) {
+        TableBox* table = std::get<0>(cell_opt);
+        active_table_offset_ = table->logical_offset;
+        active_table_row_ = std::get<1>(cell_opt);
+        active_table_col_ = std::get<2>(cell_opt);
+    } else {
+        active_table_offset_ = std::nullopt;
+    }
 
     auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_);
     if (offset_opt.has_value()) {
@@ -700,6 +753,27 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
     }
 
     if (drag_mode_ == DragMode::Text) {
+        auto cell_opt = findTableCellAt(absolute_x, absolute_y);
+        if (active_table_offset_.has_value() && std::get<0>(cell_opt) != nullptr) {
+            TableBox* current_table = std::get<0>(cell_opt);
+            int current_row = std::get<1>(cell_opt);
+            int current_col = std::get<2>(cell_opt);
+            
+            if (current_table->logical_offset == *active_table_offset_ && 
+                (current_row != active_table_row_ || current_col != active_table_col_)) {
+                // Dragged into a different cell of the same table! Switch mode.
+                drag_mode_ = DragMode::TableCellSelection;
+                table_selection_.mode = TableSelectionMode::Cell;
+                table_selection_.table_offset = *active_table_offset_;
+                table_selection_.row = active_table_row_;
+                table_selection_.col = active_table_col_;
+                table_selection_.end_row = current_row;
+                table_selection_.end_col = current_col;
+                updateLayout();
+                return true;
+            }
+        }
+
         auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_);
         if (offset_opt.has_value()) {
             if (selection_.head != *offset_opt) {
@@ -708,6 +782,24 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             }
             return true;
         }
+    }
+    
+    if (drag_mode_ == DragMode::TableCellSelection) {
+        auto cell_opt = findTableCellAt(absolute_x, absolute_y);
+        if (std::get<0>(cell_opt) != nullptr) {
+            TableBox* current_table = std::get<0>(cell_opt);
+            int current_row = std::get<1>(cell_opt);
+            int current_col = std::get<2>(cell_opt);
+            
+            if (current_table->logical_offset == *active_table_offset_) {
+                if (table_selection_.end_row != current_row || table_selection_.end_col != current_col) {
+                    table_selection_.end_row = current_row;
+                    table_selection_.end_col = current_col;
+                    updateLayout();
+                }
+            }
+        }
+        return true;
     }
 
     return false;
@@ -1230,7 +1322,16 @@ void PlumaEditor::render(IRenderer& renderer) {
                 bool is_selected = false;
                 if (table_selection_.mode != TableSelectionMode::None && table_selection_.table_offset == table->logical_offset) {
                     if (table_selection_.mode == TableSelectionMode::Table) is_selected = true;
-                    else if (table_selection_.mode == TableSelectionMode::Cell && table_selection_.col == col_idx && table_selection_.row == row_idx) is_selected = true;
+                    else if (table_selection_.mode == TableSelectionMode::Cell) {
+                        int r1 = table_selection_.row;
+                        int c1 = table_selection_.col;
+                        int r2 = table_selection_.end_row != -1 ? table_selection_.end_row : r1;
+                        int c2 = table_selection_.end_col != -1 ? table_selection_.end_col : c1;
+                        if (row_idx >= std::min(r1, r2) && row_idx <= std::max(r1, r2) &&
+                            col_idx >= std::min(c1, c2) && col_idx <= std::max(c1, c2)) {
+                            is_selected = true;
+                        }
+                    }
                     else if (table_selection_.mode == TableSelectionMode::Row && table_selection_.row == row_idx) is_selected = true;
                     else if (table_selection_.mode == TableSelectionMode::Column && table_selection_.col == col_idx) is_selected = true;
                 }
@@ -1716,7 +1817,9 @@ void PlumaEditor::updateCursorState() {
         }
     }
 
-    cursor_state_callback_(state);
+    if (cursor_state_callback_) {
+        cursor_state_callback_(state);
+    }
 }
 
 } // namespace pluma

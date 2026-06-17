@@ -473,25 +473,62 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 // Add table to document
                 // Wait, table needs to compute cell heights!
                 Twips table_height(0);
-                for (auto& row : current_table->rows) {
-                    Twips max_h(0);
+                std::vector<Twips> row_heights(current_table->rows.size(), Twips(120));
+                
+                // First pass: basic heights for rowspan=1
+                for (size_t r = 0; r < current_table->rows.size(); ++r) {
+                    Twips max_h(120);
+                    for (auto& cell : current_table->rows[r]->cells) {
+                        if (cell->rowspan == 1) {
+                            Twips cell_h(120);
+                            if (!cell->blocks.empty()) {
+                                auto& last_cb = cell->blocks.back();
+                                cell_h = last_cb->getBounds().y + last_cb->getBounds().height + Twips(60);
+                            }
+                            if (cell_h.getValue() > max_h.getValue()) max_h = cell_h;
+                        }
+                    }
+                    row_heights[r] = max_h;
+                }
+                
+                // Second pass: handle rowspan > 1
+                for (size_t r = 0; r < current_table->rows.size(); ++r) {
+                    for (auto& cell : current_table->rows[r]->cells) {
+                        if (cell->rowspan > 1) {
+                            Twips cell_h(120);
+                            if (!cell->blocks.empty()) {
+                                auto& last_cb = cell->blocks.back();
+                                cell_h = last_cb->getBounds().y + last_cb->getBounds().height + Twips(60);
+                            }
+                            Twips span_h(0);
+                            size_t end_r = std::min(r + cell->rowspan, current_table->rows.size());
+                            for (size_t i = r; i < end_r; ++i) span_h = span_h + row_heights[i];
+                            if (cell_h.getValue() > span_h.getValue()) {
+                                // Add excess to the last row of the span
+                                Twips excess = Twips(cell_h.getValue() - span_h.getValue());
+                                row_heights[end_r - 1] = row_heights[end_r - 1] + excess;
+                            }
+                        }
+                    }
+                }
+                
+                // Third pass: set bounds
+                for (size_t r = 0; r < current_table->rows.size(); ++r) {
+                    auto& row = current_table->rows[r];
                     for (auto& cell : row->cells) {
                         Twips current_x(0);
                         for (int i = 0; i < cell->col_idx && static_cast<size_t>(i) < table_col_widths.size(); ++i) {
                             current_x = current_x + table_col_widths[i];
                         }
-                        cell->setBounds({current_x, Twips(0), cell->getBounds().width, cell->getBounds().height});
-                        // Calculate real cell height
-                        Twips cell_h(120);
-                        if (!cell->blocks.empty()) {
-                            auto& last_cb = cell->blocks.back();
-                            cell_h = last_cb->getBounds().y + last_cb->getBounds().height + Twips(60);
-                        }
-                        if (cell_h.getValue() > max_h.getValue()) max_h = cell_h;
+                        
+                        Twips span_h(0);
+                        size_t end_r = std::min(r + cell->rowspan, current_table->rows.size());
+                        for (size_t i = r; i < end_r; ++i) span_h = span_h + row_heights[i];
+                        
+                        cell->setBounds({current_x, Twips(0), cell->getBounds().width, span_h});
                     }
-                    for (auto& cell : row->cells) cell->setBounds({cell->getBounds().x, Twips(0), cell->getBounds().width, max_h});
-                    row->setBounds({Twips(0), table_height, content_width, max_h});
-                    table_height = table_height + max_h;
+                    row->setBounds({Twips(0), table_height, content_width, row_heights[r]});
+                    table_height = table_height + row_heights[r];
                 }
                 current_table->setBounds({Twips(0), Twips(0), content_width, table_height});
                 

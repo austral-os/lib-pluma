@@ -4,7 +4,7 @@
   
   [![C++20](https://img.shields.io/badge/C++-20-blue.svg)](https://isocpp.org/)
   [![CMake](https://img.shields.io/badge/CMake-3.15+-success.svg)](https://cmake.org/)
-  [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
+  [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 </div>
 
 ---
@@ -117,22 +117,7 @@ int main() {
 }
 ```
 
-## 🧪 Testing & Diagnostics
-
-Pluma follows a strict **Test-Driven Development (TDD)** philosophy. It includes 32 holistic suites using `Catch2`.
-
-To run the tests:
-```bash
-cd build
-ctest -V
-```
-
-To generate the API Documentation (requires `doxygen`):
-```bash
-./scripts/generate_docs.py
-```
-This will output the XML architecture and generate a clean `docs/API_REFERENCE.md`.
 
 ## 📜 License
 
-This project is part of the **Horizon OS** ecosystem and is licensed under the MIT License.
+This project is part of the **Horizon OS** ecosystem and is licensed under the GPL-3.0 License.

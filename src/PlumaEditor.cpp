@@ -975,11 +975,35 @@ void PlumaEditor::redo() {
     onEditorAction(EditorAction::Redo, "", ModifierFlags::None);
 }
 
+static bool isTableMarker(const std::string& para) {
+    return para == "|ROW|" || para == "|CEL|" || para == "|ENDTBL|"
+        || (para.length() >= 5 && para.substr(0, 5) == "|TBL:")
+        || (para.length() >= 5 && para.substr(0, 5) == "|CEL:");
+}
+
+static uint32_t skipTableMarker(const std::string& doc_text, uint32_t pos) {
+    uint32_t len = static_cast<uint32_t>(doc_text.length());
+    while (pos < len) {
+        uint32_t para_start = pos;
+        uint32_t para_end = para_start;
+        while (para_end < len && doc_text[para_end] != '\n') {
+            para_end++;
+        }
+        std::string para = doc_text.substr(para_start, para_end - para_start);
+        if (isTableMarker(para)) {
+            pos = para_end + 1;
+            if (pos >= len) break;
+        } else {
+            break;
+        }
+    }
+    return pos;
+}
+
 void PlumaEditor::insertTextAtCursor(const std::string& text) {
     if (!selection_.isCollapsed()) {
         deleteSelection();
     } else if (insert_mode_ == InsertMode::Replace) {
-        // Replace mode: Overwrite characters if not at EOF
         uint32_t current_len = document_.getLength();
         if (selection_.head < current_len) {
             std::string existing = document_.getText().substr(selection_.head, 1);
@@ -1000,13 +1024,35 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
     }
 
     std::string text_to_insert = text;
-    if (text == "\n") {
-        uint32_t para_start = selection_.getStart();
-        std::string doc_text = document_.getText();
+    uint32_t start = selection_.getStart();
+    std::string doc_text = document_.getText();
+    
+    if (text != "\n") {
+        uint32_t para_start = start;
         while (para_start > 0 && doc_text[para_start - 1] != '\n') {
             para_start--;
         }
-        std::string para_text = doc_text.substr(para_start, selection_.getStart() - para_start);
+        uint32_t next_nl = start;
+        while (next_nl < doc_text.length() && doc_text[next_nl] != '\n') {
+            next_nl++;
+        }
+        std::string current_para = doc_text.substr(para_start, next_nl - para_start);
+
+        bool cursor_in_marker = isTableMarker(current_para) && start >= para_start && start < next_nl;
+        if (cursor_in_marker) {
+            start = skipTableMarker(doc_text, start);
+            if (start >= doc_text.length()) {
+                selection_.head = selection_.anchor = start;
+                return;
+            }
+        }
+    }
+    if (text == "\n") {
+        uint32_t para_start = start;
+        while (para_start > 0 && doc_text[para_start - 1] != '\n') {
+            para_start--;
+        }
+        std::string para_text = doc_text.substr(para_start, start - para_start);
         
         std::string copied_tags = "";
         size_t search_start = 0;
@@ -1043,7 +1089,6 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
         }
     }
 
-    uint32_t start = selection_.getStart();
     undo_manager_.beginTransaction();
     undo_manager_.addCommand(std::make_unique<InsertTextCommand>(start, text_to_insert));
     format_registry_.insertText(start, text_to_insert.length());
@@ -1091,6 +1136,10 @@ void PlumaEditor::deleteBackward() {
             }
         }
 
+        if (isTableMarker(para_text)) {
+            total_tags_length = para_text.length();
+        }
+
         if (total_tags_length > 0 && selection_.head > para_start && selection_.head <= para_start + total_tags_length) {
             undo_manager_.beginTransaction();
             undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(para_start, total_tags_length));
@@ -1102,7 +1151,6 @@ void PlumaEditor::deleteBackward() {
             return;
         }
         
-        // If cursor is at the start of an image paragraph and we press Backspace, delete the image instead of merging
         if (selection_.head == para_start && para_text.length() >= 7 && para_text.substr(0, 7) == "|IMAGE:") {
             size_t end_img = para_text.find("|", 7);
             if (end_img != std::string::npos) {
@@ -1116,10 +1164,22 @@ void PlumaEditor::deleteBackward() {
                 return;
             }
         }
+        
+        if (selection_.head == para_start && isTableMarker(para_text)) {
+            uint32_t table_end = skipTableMarker(doc_text, para_start);
+            undo_manager_.beginTransaction();
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(para_start, table_end - para_start));
+            format_registry_.deleteText(para_start, table_end - para_start);
+            undo_manager_.commitTransaction();
+            selection_.head = selection_.anchor = para_start;
+            updateLayout();
+            updateCursorState();
+            return;
+        }
 
         uint32_t start = selection_.head - 1;
         
-        // Also check if we are deleting the newline right before an image, to prevent merging
+        // Also check if we are deleting the newline right before an image or table, to prevent merging
         if (start < doc_text.length() && doc_text[start] == '\n') {
             uint32_t next_para_start = start + 1;
             if (next_para_start + 7 <= doc_text.length() && doc_text.substr(next_para_start, 7) == "|IMAGE:") {
@@ -1132,8 +1192,18 @@ void PlumaEditor::deleteBackward() {
                     undo_manager_.commitTransaction();
                     updateLayout();
                     updateCursorState();
-                    return; // Deleted the image instead of the newline
+                    return;
                 }
+            }
+            
+            uint32_t next_end = next_para_start;
+            while (next_end < doc_text.length() && doc_text[next_end] != '\n') {
+                next_end++;
+            }
+            std::string next_para = next_end > next_para_start
+                ? doc_text.substr(next_para_start, next_end - next_para_start) : "";
+            if (isTableMarker(next_para)) {
+                return;
             }
         }
 
@@ -1161,6 +1231,24 @@ void PlumaEditor::deleteForward() {
                 undo_manager_.beginTransaction();
                 undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, len));
                 format_registry_.deleteText(start, len);
+                undo_manager_.commitTransaction();
+                updateLayout();
+                updateCursorState();
+                return;
+            }
+        }
+        
+        uint32_t para_end = start;
+        while (para_end < doc_text.length() && doc_text[para_end] != '\n') {
+            para_end++;
+        }
+        if (para_end > start) {
+            std::string para = doc_text.substr(start, para_end - start);
+            if (isTableMarker(para)) {
+                uint32_t table_end = skipTableMarker(doc_text, start);
+                undo_manager_.beginTransaction();
+                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, table_end - start));
+                format_registry_.deleteText(start, table_end - start);
                 undo_manager_.commitTransaction();
                 updateLayout();
                 updateCursorState();
@@ -1234,6 +1322,29 @@ void PlumaEditor::deleteSelection() {
 void PlumaEditor::pasteText(const std::string& text) {
     if (text.empty()) return;
     
+    std::string sanitized = text;
+    size_t p = 0;
+    while (p < sanitized.length()) {
+        uint32_t line_start = static_cast<uint32_t>(p);
+        uint32_t line_end = line_start;
+        while (line_end < sanitized.length() && sanitized[line_end] != '\n') {
+            line_end++;
+        }
+        std::string line = sanitized.substr(line_start, line_end - line_start);
+        if (isTableMarker(line)) {
+            sanitized.erase(line_start, line_end - line_start);
+            p = line_start;
+            if (line_end < sanitized.length() && sanitized[line_end] == '\n') {
+                sanitized.erase(line_end, 1);
+            }
+            continue;
+        }
+        p = line_end + 1;
+        if (line_end >= sanitized.length()) break;
+    }
+    
+    if (sanitized.empty()) return;
+    
     undo_manager_.beginTransaction();
     uint32_t insert_pos = selection_.head;
     
@@ -1243,11 +1354,11 @@ void PlumaEditor::pasteText(const std::string& text) {
         format_registry_.deleteText(insert_pos, selection_.getLength());
     }
     
-    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_pos, text));
-    format_registry_.insertText(insert_pos, text.length());
+    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_pos, sanitized));
+    format_registry_.insertText(insert_pos, sanitized.length());
     undo_manager_.commitTransaction();
     
-    selection_.head = selection_.anchor = insert_pos + text.length();
+    selection_.head = selection_.anchor = insert_pos + sanitized.length();
     updateLayout();
 }
 

@@ -1251,6 +1251,15 @@ void PlumaEditor::deleteBackward() {
         }
 
         uint32_t start = selection_.head - 1;
+        std::string doc_text_utf8 = document_.getText();
+        while (start > 0 && (doc_text_utf8[start] & 0xC0) == 0x80) {
+            start--;
+        }
+        uint32_t end = selection_.head;
+        while (end < doc_text_utf8.length() && (doc_text_utf8[end] & 0xC0) == 0x80) {
+            end++;
+        }
+        uint32_t delete_len = end - start;
         
         // Also check if we are deleting the newline right before an image or table, to prevent merging
         if (start < doc_text.length() && doc_text[start] == '\n') {
@@ -1281,8 +1290,8 @@ void PlumaEditor::deleteBackward() {
         }
 
         undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, 1));
-        format_registry_.deleteText(start, 1);
+        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, delete_len));
+        format_registry_.deleteText(start, delete_len);
         undo_manager_.commitTransaction();
         selection_.head = selection_.anchor = start;
         updateLayout();
@@ -1329,9 +1338,17 @@ void PlumaEditor::deleteForward() {
             }
         }
         
+        while (start > 0 && (doc_text[start] & 0xC0) == 0x80) {
+            start--;
+        }
+        uint32_t end = selection_.head + 1;
+        while (end < doc_text.length() && (doc_text[end] & 0xC0) == 0x80) {
+            end++;
+        }
+        uint32_t delete_len = end - start;
         undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, 1));
-        format_registry_.deleteText(start, 1);
+        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, delete_len));
+        format_registry_.deleteText(start, delete_len);
         undo_manager_.commitTransaction();
         updateLayout();
         updateCursorState();

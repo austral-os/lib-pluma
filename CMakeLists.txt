@@ -60,6 +60,8 @@ target_sources(pluma PRIVATE
     # Phase 15: Document Services
     src/Services/ServiceManager.cpp
     src/Services/SearchIndexer.cpp
+    src/Services/SpellCheckerService.cpp
+    src/Services/SpellCheckAnalyzer.cpp
 
     # Phase 16: Accessibility
     src/A11y/A11yTreeBuilder.cpp
@@ -79,6 +81,7 @@ target_sources(pluma PRIVATE
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CAIRO REQUIRED cairo)
 pkg_check_modules(LIBZIP REQUIRED libzip)
+pkg_check_modules(NUSPELL REQUIRED nuspell)
 
 include(FetchContent)
 FetchContent_Declare(json
@@ -86,8 +89,8 @@ FetchContent_Declare(json
 )
 FetchContent_MakeAvailable(json)
 
-target_include_directories(pluma PUBLIC ${CAIRO_INCLUDE_DIRS} ${LIBZIP_INCLUDE_DIRS})
-target_link_libraries(pluma PUBLIC ${CAIRO_LIBRARIES} ${LIBZIP_LIBRARIES} nlohmann_json::nlohmann_json)
+target_include_directories(pluma PUBLIC ${CAIRO_INCLUDE_DIRS} ${LIBZIP_INCLUDE_DIRS} ${NUSPELL_INCLUDE_DIRS})
+target_link_libraries(pluma PUBLIC ${CAIRO_LIBRARIES} ${LIBZIP_LIBRARIES} ${NUSPELL_LIBRARIES} nlohmann_json::nlohmann_json)
 
 # Testing
 enable_testing()
@@ -129,8 +132,8 @@ set(CPACK_DEBIAN_RUNTIME_FILE_NAME "libpluma-${PROJECT_VERSION}.deb")
 set(CPACK_DEBIAN_DEVELOPMENT_FILE_NAME "libpluma-dev-${PROJECT_VERSION}.deb")
 
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "hdrdevs")
-set(CPACK_DEBIAN_RUNTIME_PACKAGE_DEPENDS "libcairo2, libzip5")
-set(CPACK_DEBIAN_DEVELOPMENT_PACKAGE_DEPENDS "libpluma (= ${PROJECT_VERSION}), libzip-dev")
+set(CPACK_DEBIAN_RUNTIME_PACKAGE_DEPENDS "libcairo2, libzip5, libnuspell5")
+set(CPACK_DEBIAN_DEVELOPMENT_PACKAGE_DEPENDS "libpluma (= ${PROJECT_VERSION}), libzip-dev, libnuspell-dev")
 set(CPACK_DEBIAN_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
 

@@ -35,6 +35,15 @@ void FormatRegistry::clear() {
     spans_.clear();
 }
 
+void FormatRegistry::clearDecorationGlobally(TextDecoration target_dec) {
+    for (auto& span : spans_) {
+        auto dec = span.style.get(PropertyId::Decoration);
+        if (dec && std::get<TextDecoration>(*dec) == target_dec) {
+            span.style.remove(PropertyId::Decoration);
+        }
+    }
+}
+
 void FormatRegistry::insertText(uint32_t offset, uint32_t length) {
     for (auto& span : spans_) {
         if (span.start > offset) {

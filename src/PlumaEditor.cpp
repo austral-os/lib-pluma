@@ -126,6 +126,11 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
     updateLayout();
 }
 
+void PlumaEditor::clearDecorationGlobally(TextDecoration dec) {
+    format_registry_.clearDecorationGlobally(dec);
+    updateLayout();
+}
+
 void PlumaEditor::setViewport(Twips width, Twips height) {
     width_ = width;
     height_ = height;
@@ -1771,6 +1776,11 @@ void PlumaEditor::render(IRenderer& renderer) {
                             underline_rect.y = underline_rect.y + run_rect.height - Twips(40); // Baseline offset approx
                             underline_rect.height = Twips(20);
                             display_list.addCommand(std::make_unique<FillRectCommand>(underline_rect, text_color));
+                        } else if (std::get<TextDecoration>(*dec) == TextDecoration::SpellingError) {
+                            Rect underline_rect = run_rect;
+                            underline_rect.y = underline_rect.y + run_rect.height - Twips(20); // Lower than underline
+                            underline_rect.height = Twips(30);
+                            display_list.addCommand(std::make_unique<FillRectCommand>(underline_rect, 0xFFFF0000)); // Solid Red for now
                         }
                     }
                 }

@@ -231,6 +231,7 @@ public:
      * @brief Applies a text style to a specific range of characters.
      */
     void applyStyle(uint32_t start, uint32_t length, PropertyId id, PropertyValue value);
+    void clearDecorationGlobally(TextDecoration dec);
 
     /**
      * @brief Gets the text currently selected by the user.

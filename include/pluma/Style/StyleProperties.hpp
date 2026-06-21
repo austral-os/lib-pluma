@@ -26,7 +26,8 @@ enum class VerticalAlign {
 enum class TextDecoration {
     None,
     Underline,
-    StrikeThrough
+    StrikeThrough,
+    SpellingError
 };
 
 enum class TextWrapMode {
@@ -80,7 +81,9 @@ enum class PropertyId {
     ImageTitle,
     DropCapLines,
     ImageX,
-    ImageY
+    ImageY,
+    Language,
+    SpellCheckEnabled
 };
 
 using Color = uint32_t; ///< Format: ARGB
@@ -118,6 +121,8 @@ inline bool inheritsByDefault(PropertyId id) {
         case PropertyId::LineSpacing:
         case PropertyId::ParagraphSpacingBefore:
         case PropertyId::ParagraphSpacingAfter:
+        case PropertyId::Language:
+        case PropertyId::SpellCheckEnabled:
             return true;
         case PropertyId::BackgroundColor:
         case PropertyId::VerticalAlignment:

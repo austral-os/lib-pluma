@@ -215,6 +215,7 @@ public:
      * @brief Gets the number of pages in the current document.
      */
     size_t getPageCount() const { return current_pages_.size(); }
+    uint32_t getCurrentPageNumber() const;
 
     /**
      * @brief Gets the total physical size of the document (all pages + gaps).

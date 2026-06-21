@@ -2776,4 +2776,17 @@ void PlumaEditor::splitTable() {
     table_selection_.end_row = -1;
 }
 
+
+uint32_t PlumaEditor::getCurrentPageNumber() const {
+    if (current_pages_.empty()) return 1;
+    auto rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_);
+    if (!rect_opt) return 1;
+    pluma::Twips y = rect_opt->y;
+    pluma::Twips page_total_height = page_size_.height + page_gap_;
+    uint32_t page_idx = y.getValue() / page_total_height.getValue();
+    return page_idx + 1;
+}
+
 } // namespace pluma
+
+

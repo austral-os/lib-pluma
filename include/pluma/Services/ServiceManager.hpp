@@ -25,7 +25,7 @@ public:
      * @brief Asynchronously dispatches the snapshot to all registered services.
      * @param snapshot The immutable document state.
      */
-    void runAnalysis(std::shared_ptr<DocumentSnapshot> snapshot);
+    void runAnalysis(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles);
 
     /**
      * @brief Waits for all currently running analyses to complete.

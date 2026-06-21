@@ -16,7 +16,7 @@ namespace pluma {
  */
 class SearchIndexer : public IDocumentService {
 public:
-    void analyze(std::shared_ptr<DocumentSnapshot> snapshot) override;
+    void analyze(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles) override;
     std::string getName() const override { return "SearchIndexer"; }
     
     /**

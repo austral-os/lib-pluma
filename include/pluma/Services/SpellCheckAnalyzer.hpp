@@ -16,7 +16,7 @@ public:
 
     SpellCheckAnalyzer(std::shared_ptr<SpellCheckerService> spell_checker, std::string default_lang, ErrorListCallback on_complete);
 
-    void analyze(std::shared_ptr<DocumentSnapshot> snapshot) override;
+    void analyze(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles) override;
     std::string getName() const override { return "SpellCheckAnalyzer"; }
 
 private:

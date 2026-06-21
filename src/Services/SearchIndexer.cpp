@@ -4,7 +4,8 @@
 
 namespace pluma {
 
-void SearchIndexer::analyze(std::shared_ptr<DocumentSnapshot> snapshot) {
+void SearchIndexer::analyze(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles) {
+    (void)styles;
     if (!snapshot) return;
 
     std::string text = snapshot->getText();

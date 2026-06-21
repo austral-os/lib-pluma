@@ -17,7 +17,8 @@ TEST_CASE("Document Services - Asynchronous Analysis", "[services]") {
     manager.registerService(indexer);
     
     // Dispatch asynchronous task
-    manager.runAnalysis(snapshot);
+    pluma::FormatRegistry dummy_registry;
+    manager.runAnalysis(snapshot, dummy_registry);
     
     // Wait for the background thread to finish
     manager.waitForAll();

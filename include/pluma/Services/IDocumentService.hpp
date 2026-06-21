@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <pluma/PieceTable.hpp>
+#include <pluma/Style/FormatRegistry.hpp>
 
 namespace pluma {
 
@@ -21,7 +22,7 @@ public:
      * @brief Performs analysis on a stable snapshot.
      * @param snapshot The immutable state of the document.
      */
-    virtual void analyze(std::shared_ptr<DocumentSnapshot> snapshot) = 0;
+    virtual void analyze(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles) = 0;
     
     /**
      * @brief Returns the internal name of the service.

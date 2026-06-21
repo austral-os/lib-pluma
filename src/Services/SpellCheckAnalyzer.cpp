@@ -7,14 +7,10 @@ SpellCheckAnalyzer::SpellCheckAnalyzer(std::shared_ptr<SpellCheckerService> spel
     : spell_checker_(std::move(spell_checker)), default_lang_(std::move(default_lang)), on_complete_(std::move(on_complete)) {
 }
 
-void SpellCheckAnalyzer::analyze(std::shared_ptr<DocumentSnapshot> snapshot) {
+void SpellCheckAnalyzer::analyze(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles) {
     if (!snapshot || !spell_checker_) return;
 
     std::string text = snapshot->getText();
-    
-    // For MVP we assume a default document language if not specified per span
-    // In a complete implementation we would need to check FormatRegistry for PropertyId::Language per span.
-    std::string current_lang = default_lang_; 
     
     std::string current_word;
     uint32_t word_start = 0;
@@ -30,6 +26,13 @@ void SpellCheckAnalyzer::analyze(std::shared_ptr<DocumentSnapshot> snapshot) {
             current_word += c;
         } else {
             if (!current_word.empty()) {
+                std::string current_lang = default_lang_;
+                auto style_opt = styles.getStyleAt(word_start).get(pluma::PropertyId::Language);
+                if (style_opt) {
+                    current_lang = std::get<std::string>(*style_opt);
+                }
+                
+                spell_checker_->ensureDictionaryLoaded(current_lang);
                 if (!spell_checker_->checkWord(current_word, current_lang)) {
                     errors.push_back({word_start, current_word.length()});
                 }
@@ -39,6 +42,13 @@ void SpellCheckAnalyzer::analyze(std::shared_ptr<DocumentSnapshot> snapshot) {
     }
 
     if (!current_word.empty()) {
+        std::string current_lang = default_lang_;
+        auto style_opt = styles.getStyleAt(word_start).get(pluma::PropertyId::Language);
+        if (style_opt) {
+            current_lang = std::get<std::string>(*style_opt);
+        }
+        
+        spell_checker_->ensureDictionaryLoaded(current_lang);
         if (!spell_checker_->checkWord(current_word, current_lang)) {
             errors.push_back({word_start, current_word.length()});
         }

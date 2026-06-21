@@ -9,7 +9,7 @@ void ServiceManager::registerService(std::shared_ptr<IDocumentService> service) 
     }
 }
 
-void ServiceManager::runAnalysis(std::shared_ptr<DocumentSnapshot> snapshot) {
+void ServiceManager::runAnalysis(std::shared_ptr<DocumentSnapshot> snapshot, pluma::FormatRegistry styles) {
     // Clean up finished tasks
     active_tasks_.erase(
         std::remove_if(active_tasks_.begin(), active_tasks_.end(),
@@ -19,8 +19,8 @@ void ServiceManager::runAnalysis(std::shared_ptr<DocumentSnapshot> snapshot) {
 
     // Launch new tasks for all services using the shared immutable snapshot
     for (auto& service : services_) {
-        active_tasks_.push_back(std::async(std::launch::async, [service, snapshot]() {
-            service->analyze(snapshot);
+        active_tasks_.push_back(std::async(std::launch::async, [service, snapshot, styles]() {
+            service->analyze(snapshot, styles);
         }));
     }
 }

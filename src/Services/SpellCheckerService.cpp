@@ -12,35 +12,64 @@ bool SpellCheckerService::loadDictionary(const std::string& langCode, const std:
     try {
         auto dict = std::make_unique<nuspell::Dictionary>();
         dict->load_aff_dic(affPath);
+        std::lock_guard<std::mutex> lock(mutex_);
         dictionaries_[langCode] = std::move(dict);
         return true;
-    } catch (const std::exception&) {
+    } catch (...) {
         return false;
     }
 }
 
-bool SpellCheckerService::checkWord(std::string_view word, const std::string& langCode) const {
-    auto it = dictionaries_.find(langCode);
-    if (it == dictionaries_.end()) {
-        return true; // If we don't have the dictionary, assume correct to avoid false positives
+void SpellCheckerService::registerDictionary(const std::string& langCode, const std::string& affPath, const std::string& dicPath) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_dictionaries_[langCode] = {affPath, dicPath};
+}
+
+bool SpellCheckerService::ensureDictionaryLoaded(const std::string& langCode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (dictionaries_.find(langCode) != dictionaries_.end()) {
+        return true;
     }
-    
-    return it->second->spell(std::string(word));
+    auto it = pending_dictionaries_.find(langCode);
+    if (it != pending_dictionaries_.end()) {
+        try {
+            auto dict = std::make_unique<nuspell::Dictionary>();
+            dict->load_aff_dic(it->second.first);
+            dictionaries_[langCode] = std::move(dict);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool SpellCheckerService::checkWord(std::string_view word, const std::string& langCode) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = dictionaries_.find(langCode);
+    if (it != dictionaries_.end()) {
+        std::string w(word);
+        return it->second->spell(w);
+    }
+    // If language is not loaded, we consider it "correct" to not show false positives
+    return true;
 }
 
 std::vector<std::string> SpellCheckerService::getSuggestions(std::string_view word, const std::string& langCode) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = dictionaries_.find(langCode);
-    if (it == dictionaries_.end()) {
-        return {};
+    if (it != dictionaries_.end()) {
+        std::string w(word);
+        std::vector<std::string> results;
+        it->second->suggest(w, results);
+        return results;
     }
-    
-    std::vector<std::string> sugs;
-    it->second->suggest(std::string(word), sugs);
-    return sugs;
+    return {};
 }
 
 bool SpellCheckerService::hasLanguage(const std::string& langCode) const {
-    return dictionaries_.find(langCode) != dictionaries_.end();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dictionaries_.find(langCode) != dictionaries_.end() || pending_dictionaries_.find(langCode) != pending_dictionaries_.end();
 }
 
 } // namespace pluma

@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include <nuspell/dictionary.hxx>
+#include <mutex>
 
 namespace pluma {
 
@@ -45,8 +46,20 @@ public:
      */
     bool hasLanguage(const std::string& langCode) const;
 
+    /**
+     * @brief Register the paths for a dictionary without loading it.
+     */
+    void registerDictionary(const std::string& langCode, const std::string& affPath, const std::string& dicPath);
+
+    /**
+     * @brief Ensure the dictionary for the language is loaded.
+     */
+    bool ensureDictionaryLoaded(const std::string& langCode);
+
 private:
     std::unordered_map<std::string, std::unique_ptr<nuspell::Dictionary>> dictionaries_;
+    std::unordered_map<std::string, std::pair<std::string, std::string>> pending_dictionaries_;
+    mutable std::mutex mutex_;
 };
 
 } // namespace pluma

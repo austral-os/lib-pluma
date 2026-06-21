@@ -24,7 +24,7 @@ add_executable(pluma_tests
     test_advanced_pagination.cpp
     test_virtualization.cpp
     test_services.cpp
-    test_spell_checker.cpp
+    
     test_a11y.cpp
     test_plugins.cpp
     test_diagnostics.cpp

@@ -846,6 +846,28 @@ bool PlumaEditor::onScroll(double delta_x, double delta_y, ModifierFlags mods) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// Helper: find the last renderable content position in the last cell of a table
+// ---------------------------------------------------------------------------
+static uint32_t findLastTableContent(const BlockBox& block) {
+    if (!block.table || block.table->rows.empty())
+        return 0;
+    const auto& last_row = block.table->rows.back();
+    if (last_row->cells.empty())
+        return 0;
+    const auto& last_cell = last_row->cells.back();
+    if (last_cell->blocks.empty())
+        return 0;
+    const auto& last_cb = last_cell->blocks.back();
+    if (last_cb->lines.empty())
+        return 0;
+    const auto& last_line = last_cb->lines.back();
+    if (last_line->runs.empty())
+        return 0;
+    const auto& last_run = last_line->runs.back();
+    return last_run->logical_offset + last_run->logical_text.length();
+}
+
 void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, ModifierFlags mods) {
     caret_blink_state_ = true; // Reset blink state on any action to keep it visible while typing
     
@@ -929,7 +951,6 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             break;
         case EditorAction::MoveCursorUp: {
             if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
-                // Use half a line-height (90 twips) so we reliably land in the line above
                 Twips half_line(90);
                 Twips target_y = Twips(std::max(0, rect->y.getValue() - half_line.getValue()));
                 if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_)) {
@@ -937,7 +958,44 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                         selection_.head = *new_offset;
                         if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                         updateCursorState();
+                        break;
                     }
+                }
+                // Fallback: if physical resolution didn't move us, check for a table
+                // block just above target_y (which was skipped because y is in the gap).
+                // We mirror resolvePhysicalToLogical's page/block iteration to find
+                // the last skipped block; if it's a table, navigate to its last cell.
+                bool found = false;
+                Twips page_y(page_gap_);
+                for (const auto& page : current_pages_) {
+                    bool is_last_page = (&page == &current_pages_.back());
+                    if (target_y.getValue() >= (page_y + page->getBounds().height + page_gap_).getValue()
+                        && !is_last_page) {
+                        page_y = page_y + page->getBounds().height + page_gap_;
+                        continue;
+                    }
+                    Twips page_top = page_y + page->getBounds().y;
+                    const BlockBox* last_skipped_table = nullptr;
+                    for (const auto& block : page->blocks) {
+                        Twips block_bottom = page_top + block->getBounds().y + block->getBounds().height;
+                        if (target_y.getValue() >= block_bottom.getValue()) {
+                            if (block->table)
+                                last_skipped_table = block.get();
+                        } else {
+                            break;
+                        }
+                    }
+                    if (last_skipped_table) {
+                        uint32_t tpos = findLastTableContent(*last_skipped_table);
+                        if (tpos > 0 && tpos != selection_.head) {
+                            selection_.head = tpos;
+                            if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                            updateCursorState();
+                            found = true;
+                        }
+                    }
+                    if (found) break;
+                    page_y = page_y + page->getBounds().height + page_gap_;
                 }
             }
             break;
@@ -1026,6 +1084,7 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
     std::string text_to_insert = text;
     uint32_t start = selection_.getStart();
     std::string doc_text = document_.getText();
+    bool cursor_at_tbl_start = false;
     
     if (text != "\n") {
         uint32_t para_start = start;
@@ -1040,10 +1099,15 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
 
         bool cursor_in_marker = isTableMarker(current_para) && start >= para_start && start < next_nl;
         if (cursor_in_marker) {
-            start = skipTableMarker(doc_text, start);
-            if (start >= doc_text.length()) {
-                selection_.head = selection_.anchor = start;
-                return;
+            if (start == para_start && current_para.length() >= 5 && current_para.substr(0, 5) == "|TBL:") {
+                text_to_insert = text + "\n";
+                cursor_at_tbl_start = true;
+            } else {
+                start = skipTableMarker(doc_text, start);
+                if (start >= doc_text.length()) {
+                    selection_.head = selection_.anchor = start;
+                    return;
+                }
             }
         }
     }
@@ -1094,7 +1158,11 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
     format_registry_.insertText(start, text_to_insert.length());
     undo_manager_.commitTransaction();
     
-    selection_.head = selection_.anchor = start + text_to_insert.length();
+    if (cursor_at_tbl_start) {
+        selection_.head = selection_.anchor = start + text_to_insert.length() - 1;
+    } else {
+        selection_.head = selection_.anchor = start + text_to_insert.length();
+    }
     updateLayout();
     updateCursorState();
 }

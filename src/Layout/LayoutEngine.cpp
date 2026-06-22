@@ -575,6 +575,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         else if (wrap_str == "TopAndBottom") mode = TextWrapMode::TopAndBottom;
                         else if (wrap_str == "BehindText") mode = TextWrapMode::BehindText;
                         else if (wrap_str == "InFrontOfText") mode = TextWrapMode::InFrontOfText;
+                        else if (wrap_str == "InLine") mode = TextWrapMode::InLine;
                         else {
                             image_path = mode_str; // Colon was part of the path, or invalid mode. Default InLine.
                         }
@@ -586,6 +587,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         else if (mode_str == "TopAndBottom") mode = TextWrapMode::TopAndBottom;
                         else if (mode_str == "BehindText") mode = TextWrapMode::BehindText;
                         else if (mode_str == "InFrontOfText") mode = TextWrapMode::InFrontOfText;
+                        else if (mode_str == "InLine") mode = TextWrapMode::InLine;
                         else {
                             image_path = mode_str;
                         }

@@ -191,6 +191,16 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 start = end_tag + 1;
             }
         }
+        
+        if (auto indent = para_style.get(PropertyId::ParagraphIndentLeft)) {
+            para_left_indent = Twips(std::get<float>(*indent) * 1440.0f);
+        }
+        if (auto indent = para_style.get(PropertyId::ParagraphIndentRight)) {
+            para_right_indent = Twips(std::get<float>(*indent) * 1440.0f);
+        }
+        if (auto indent = para_style.get(PropertyId::ParagraphIndentFirstLine)) {
+            para_first_indent = Twips(std::get<float>(*indent) * 1440.0f);
+        }
 
         int list_type = -1; // -1 none, 0 UL, 1 OL
         int list_level = 0;
@@ -1035,7 +1045,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         block->setBounds({margins.left, Twips(0), content_width, current_y}); // Apply left margin offset
         logical_offset += para.length() + 1; // account for \n
 
-        if (spacing_before.getValue() > 0 && current_page_y.getValue() > margins.top.getValue()) {
+        if (spacing_before.getValue() > 0) {
             current_page_y = current_page_y + spacing_before;
         }
 

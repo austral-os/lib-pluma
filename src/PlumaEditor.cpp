@@ -1693,6 +1693,14 @@ void PlumaEditor::render(IRenderer& renderer) {
                                 }
                             }
 
+                            // Draw text background if specified
+                            if (auto bg = run->style.get(PropertyId::BackgroundColor)) {
+                                Color bg_color = std::get<Color>(*bg);
+                                if ((bg_color & 0xFF000000) != 0) {
+                                    display_list.addCommand(std::make_unique<FillRectCommand>(run_rect, bg_color));
+                                }
+                            }
+
                             display_list.addCommand(std::make_unique<DrawGlyphRunCommand>(
                                 run_rect,
                                 run->run,
@@ -1700,6 +1708,21 @@ void PlumaEditor::render(IRenderer& renderer) {
                                 run_font,
                                 text_color
                             ));
+
+                            // Text Decoration
+                            if (auto dec = run->style.get(PropertyId::Decoration)) {
+                                if (std::get<TextDecoration>(*dec) == TextDecoration::Underline) {
+                                    Rect underline_rect = run_rect;
+                                    underline_rect.y = underline_rect.y + run_rect.height - Twips(40); // Baseline offset approx
+                                    underline_rect.height = Twips(20);
+                                    display_list.addCommand(std::make_unique<FillRectCommand>(underline_rect, text_color));
+                                } else if (std::get<TextDecoration>(*dec) == TextDecoration::SpellingError) {
+                                    Rect underline_rect = run_rect;
+                                    underline_rect.y = underline_rect.y + run_rect.height - Twips(20); // Lower than underline
+                                    underline_rect.height = Twips(30);
+                                    display_list.addCommand(std::make_unique<FillRectCommand>(underline_rect, 0xFFFF0000)); // Solid Red for now
+                                }
+                            }
                         }
                     }
                     

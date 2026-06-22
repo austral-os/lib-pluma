@@ -235,6 +235,16 @@ public:
     void clearDecorationGlobally(TextDecoration dec);
 
     /**
+     * @brief Suspends automatic layout updates when applying multiple styles.
+     */
+    void suspendLayout();
+
+    /**
+     * @brief Resumes automatic layout updates and triggers one if pending.
+     */
+    void resumeLayout();
+
+    /**
      * @brief Gets the text currently selected by the user.
      * @return A UTF-8 string containing the selection, or empty if no selection.
      */
@@ -466,6 +476,9 @@ private:
     std::string header_text_;
     std::string footer_text_;
     std::function<void(const CursorState&)> cursor_state_callback_;
+    
+    bool layout_suspended_{false};
+    bool layout_pending_{false};
     
     void updateCursorState();
 };

@@ -1480,11 +1480,29 @@ void PlumaEditor::deleteSelectedImage() {
 }
 
 void PlumaEditor::updateLayout() {
+    if (layout_suspended_) {
+        layout_pending_ = true;
+        return;
+    }
+    layout_pending_ = false;
+
     // In a full implementation, we'd sync the DOM and use InvalidationTracker.
     // For the facade glue, a full rebuild ensures consistency.
     current_pages_ = layout_engine_.layoutText(document_.getText(), page_size_, page_margins_, format_registry_, header_text_, footer_text_);
     updateCursorState();
 }
+
+void PlumaEditor::suspendLayout() {
+    layout_suspended_ = true;
+}
+
+void PlumaEditor::resumeLayout() {
+    layout_suspended_ = false;
+    if (layout_pending_) {
+        updateLayout();
+    }
+}
+
 
 std::string PlumaEditor::getSelectedText() const {
     if (selection_.isCollapsed()) return "";

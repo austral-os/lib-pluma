@@ -122,7 +122,101 @@ void PlumaEditor::setPageGap(Twips gap) {
 }
 
 void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, PropertyValue value) {
-    format_registry_.applyStyle(start, length, id, value);
+    if (table_selection_.mode != TableSelectionMode::None) {
+        std::string doc_text = document_.getText();
+        uint32_t offset = table_selection_.table_offset;
+        
+        int current_row = -1;
+        int current_col = -1;
+        
+        size_t next_tag = doc_text.find('\n', offset);
+        if (next_tag != std::string::npos) offset = next_tag + 1;
+        
+        while (offset < doc_text.length()) {
+            if (doc_text.substr(offset, 6) == "|ROW|\n") {
+                current_row++;
+                current_col = -1;
+                offset += 6;
+                continue;
+            }
+            bool is_cel = (doc_text.substr(offset, 5) == "|CEL|");
+            bool is_cel_col = false;
+            if (!is_cel && doc_text.length() >= offset + 5 && doc_text.substr(offset, 5) == "|CEL:") {
+                is_cel_col = true;
+            }
+            
+            if (is_cel || is_cel_col) {
+                current_col++;
+                if (is_cel) {
+                    offset += 5;
+                    if (doc_text.substr(offset, 1) == "\n") offset += 1;
+                } else {
+                    size_t end_tag = doc_text.find("|\n", offset);
+                    if (end_tag != std::string::npos) {
+                        offset = end_tag + 2;
+                    } else {
+                        offset += 5;
+                    }
+                }
+                
+                uint32_t cell_start = offset;
+                
+                size_t next_cel = doc_text.find("\n|CEL|", offset);
+                size_t next_cel_col = doc_text.find("\n|CEL:", offset);
+                size_t next_row = doc_text.find("\n|ROW|", offset);
+                size_t next_end = doc_text.find("\n|ENDTBL|", offset);
+                
+                size_t cell_end = doc_text.length();
+                if (next_cel != std::string::npos) cell_end = std::min(cell_end, next_cel);
+                if (next_cel_col != std::string::npos) cell_end = std::min(cell_end, next_cel_col);
+                if (next_row != std::string::npos) cell_end = std::min(cell_end, next_row);
+                if (next_end != std::string::npos) cell_end = std::min(cell_end, next_end);
+                
+                bool is_selected = false;
+                if (table_selection_.mode == TableSelectionMode::Table) is_selected = true;
+                else if (table_selection_.mode == TableSelectionMode::Row && table_selection_.row == current_row) is_selected = true;
+                else if (table_selection_.mode == TableSelectionMode::Column && table_selection_.col == current_col) is_selected = true;
+                else if (table_selection_.mode == TableSelectionMode::Cell) {
+                    int r1 = table_selection_.row;
+                    int c1 = table_selection_.col;
+                    int r2 = table_selection_.end_row != -1 ? table_selection_.end_row : r1;
+                    int c2 = table_selection_.end_col != -1 ? table_selection_.end_col : c1;
+                    
+                    int min_row = std::min(r1, r2);
+                    int max_row = std::max(r1, r2);
+                    int min_col = std::min(c1, c2);
+                    int max_col = std::max(c1, c2);
+                    
+                    if (current_row >= min_row && current_row <= max_row && current_col >= min_col && current_col <= max_col) {
+                        is_selected = true;
+                    }
+                }
+                
+                if (is_selected) {
+                    if (cell_end > cell_start) {
+                        format_registry_.applyStyle(cell_start, cell_end - cell_start, id, value);
+                    }
+                }
+                
+                offset = cell_end;
+                if (offset < doc_text.length() && doc_text[offset] == '\n') offset++;
+                continue;
+            }
+
+            if (doc_text.length() >= offset + 9 && doc_text.substr(offset, 9) == "|ENDTBL|\n") {
+                break;
+            }
+            
+            size_t next_tag_search = doc_text.find("\n|", offset);
+            if (next_tag_search != std::string::npos) {
+                offset = next_tag_search + 1; 
+            } else {
+                break;
+            }
+        }
+    } else {
+        format_registry_.applyStyle(start, length, id, value);
+    }
     updateLayout();
 }
 
@@ -1542,10 +1636,28 @@ void PlumaEditor::render(IRenderer& renderer) {
 
                 for (const auto& cell_block : cell->blocks) {
                     for (const auto& cell_line : cell_block->lines) {
+                        Twips remaining_space = Twips(cell_block->getBounds().width.getValue() - cell_line->getBounds().width.getValue());
+                        if (remaining_space.getValue() < 0) remaining_space = Twips(0);
+
+                        Twips align_offset(0);
+                        Twips justify_gap(0);
+                        bool is_last_line = (&cell_line == &cell_block->lines.back());
+                        if (cell_block->alignment == TextAlign::Center) {
+                            align_offset = Twips(remaining_space.getValue() / 2);
+                        } else if (cell_block->alignment == TextAlign::Right) {
+                            align_offset = remaining_space;
+                        } else if (cell_block->alignment == TextAlign::Justify && !is_last_line && cell_line->runs.size() > 1) {
+                            justify_gap = Twips(remaining_space.getValue() / (int)(cell_line->runs.size() - 1));
+                        }
+
+                        Twips line_base_x = cx + cell_block->getBounds().x + cell_line->getBounds().x + align_offset;
+                        Twips current_justify_offset(0);
+
                         for (const auto& run : cell_line->runs) {
-                            Twips draw_x = cx + cell_block->getBounds().x + cell_line->getBounds().x + run->getBounds().x;
+                            Twips draw_x = line_base_x + run->getBounds().x + current_justify_offset;
                             Twips draw_y = cy + cell_block->getBounds().y + cell_line->getBounds().y + run->getBounds().y;
                             Rect run_rect{draw_x, draw_y, run->getBounds().width, run->getBounds().height};
+                            current_justify_offset = current_justify_offset + justify_gap;
 
                             Color text_color = cell_default_text_color;
                             if (auto c = run->style.get(PropertyId::TextColor))

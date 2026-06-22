@@ -34,10 +34,36 @@ resolveInCellLines(const TableCellBox& cell,
                     if (logical_offset >= run_start && logical_offset <= run_end) {
                         uint32_t char_index = logical_offset - run_start;
 
+                        Twips remaining_space = Twips(
+                            cb->getBounds().width.getValue() -
+                            line->getBounds().width.getValue());
+                        if (remaining_space.getValue() < 0) remaining_space = Twips(0);
+
+                        Twips align_offset(0), justify_gap(0);
+                        bool is_last_line = (&line == &cb->lines.back());
+                        if (cb->alignment == TextAlign::Center)
+                            align_offset = Twips(remaining_space.getValue() / 2);
+                        else if (cb->alignment == TextAlign::Right)
+                            align_offset = remaining_space;
+                        else if (cb->alignment == TextAlign::Justify &&
+                                 !is_last_line && line->runs.size() > 1)
+                            justify_gap = Twips(remaining_space.getValue() /
+                                                (int)(line->runs.size() - 1));
+
+                        int run_index = 0;
+                        for (size_t i = 0; i < line->runs.size(); ++i) {
+                            if (line->runs[i].get() == run_box.get()) {
+                                run_index = (int)i;
+                                break;
+                            }
+                        }
+
                         Twips caret_x = cell_abs_x
                                       + cb->getBounds().x
                                       + line->getBounds().x
-                                      + run_box->getBounds().x;
+                                      + align_offset
+                                      + run_box->getBounds().x
+                                      + Twips(justify_gap.getValue() * run_index);
 
                         for (size_t i = 0; i < char_index && i < run_box->run.glyphs.size(); ++i)
                             caret_x = caret_x + run_box->run.glyphs[i].x_advance;

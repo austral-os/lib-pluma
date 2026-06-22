@@ -57,6 +57,9 @@ enum class PropertyId {
     LineSpacing,
     ParagraphSpacingBefore,
     ParagraphSpacingAfter,
+    ParagraphIndentLeft,
+    ParagraphIndentRight,
+    ParagraphIndentFirstLine,
     TableWidth,
     TableColumnWidths,
     TableRowHeights,
@@ -121,6 +124,9 @@ inline bool inheritsByDefault(PropertyId id) {
         case PropertyId::LineSpacing:
         case PropertyId::ParagraphSpacingBefore:
         case PropertyId::ParagraphSpacingAfter:
+        case PropertyId::ParagraphIndentLeft:
+        case PropertyId::ParagraphIndentRight:
+        case PropertyId::ParagraphIndentFirstLine:
         case PropertyId::Language:
         case PropertyId::SpellCheckEnabled:
             return true;

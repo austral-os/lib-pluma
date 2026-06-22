@@ -455,6 +455,10 @@ private:
     int active_table_col_{-1};
     int active_table_row_{-1};
     
+public:
+    bool isInTable() const { return active_table_offset_.has_value(); }
+
+private:
     TableSelection table_selection_;
     
     InsertMode insert_mode_{InsertMode::Insert};

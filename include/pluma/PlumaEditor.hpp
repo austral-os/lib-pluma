@@ -505,6 +505,7 @@ private:
     
     DragMode drag_mode_{DragMode::None};
     ResizeHandle active_handle_{ResizeHandle::None};
+    std::optional<size_t> active_page_index_ = std::nullopt;
     std::optional<uint32_t> selected_image_offset_;
     Twips drag_start_x_{0}, drag_start_y_{0};
     Twips drag_initial_w_{0}, drag_initial_h_{0};

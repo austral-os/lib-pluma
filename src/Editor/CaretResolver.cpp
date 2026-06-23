@@ -94,11 +94,19 @@ CaretResolver::resolveLogicalToPhysical(
     const std::vector<std::unique_ptr<PageBox>>& pages,
     uint32_t logical_offset,
     Twips page_gap,
-    DocumentRegion region)
+    DocumentRegion region,
+    std::optional<size_t> target_page)
 {
     Twips current_page_y(page_gap);
 
-    for (const auto& page : pages) {
+    for (size_t p_idx = 0; p_idx < pages.size(); ++p_idx) {
+        const auto& page = pages[p_idx];
+        
+        if (target_page.has_value() && p_idx != target_page.value()) {
+            current_page_y = current_page_y + page->getBounds().height + page_gap;
+            continue;
+        }
+
         Twips current_block_y = current_page_y + page->getBounds().y;
 
         const auto* blocks_ptr = &page->blocks;

@@ -1088,6 +1088,13 @@ bool PlumaEditor::onMouseDoubleClick(double x, double y, MouseButton button, Mod
         }
 
         if (new_region != active_region_) {
+            if (new_region == DocumentRegion::Body) {
+                active_page_index_ = std::nullopt;
+            } else {
+                size_t clicked_page = static_cast<size_t>(absolute_y.getValue() / page_total.getValue());
+                if (clicked_page >= current_pages_.size()) clicked_page = current_pages_.size() - 1;
+                active_page_index_ = clicked_page;
+            }
             setActiveRegion(new_region);
             return true;
         }
@@ -1190,7 +1197,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 // Skip non-renderable positions (table tag characters like |ROW|, |CEL|…)
                 // A position is non-renderable when it has no run box in the layout.
                 while (active_doc_->selection.head > 0 &&
-                       !CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
+                       !CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                     active_doc_->selection.head--;
                 }
                 active_doc_->selection.head = snapLeft(active_doc_->selection.head);
@@ -1203,7 +1210,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 active_doc_->selection.head++;
                 // Skip non-renderable positions (table tag characters)
                 while (active_doc_->selection.head < active_doc_->document.getLength() &&
-                       !CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
+                       !CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                     active_doc_->selection.head++;
                 }
                 active_doc_->selection.head = snapRight(active_doc_->selection.head);
@@ -1235,7 +1242,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             }
             break;
         case EditorAction::MoveCursorUp: {
-            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
+            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                 Twips half_line(90);
                 Twips target_y = Twips(std::max(0, rect->y.getValue() - half_line.getValue()));
                 if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
@@ -1286,7 +1293,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             break;
         }
         case EditorAction::MoveCursorDown: {
-            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
+            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                 // Land in the middle of the line below
                 Twips target_y = rect->y + rect->height + Twips(rect->height.getValue() / 2);
                 if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
@@ -1309,6 +1316,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             if (active_region_ != DocumentRegion::Body) {
                 active_region_ = DocumentRegion::Body;
                 active_doc_ = &main_doc_;
+                active_page_index_ = std::nullopt;
                 updateLayout();
                 updateCursorState();
             }
@@ -2448,7 +2456,7 @@ void PlumaEditor::render(IRenderer& renderer) {
 
     // Draw the caret if it is visible and there is no active selection
     if (caret_visible_ && caret_blink_state_ && active_doc_->selection.isCollapsed()) {
-        auto caret_rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_);
+        auto caret_rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_);
         if (caret_rect_opt.has_value()) {
             Rect caret = *caret_rect_opt;
             Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
@@ -3277,7 +3285,7 @@ void PlumaEditor::splitTable() {
 
 uint32_t PlumaEditor::getCurrentPageNumber() const {
     if (current_pages_.empty()) return 1;
-    auto rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_);
+    auto rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_);
     if (!rect_opt) return 1;
     pluma::Twips y = rect_opt->y;
     pluma::Twips page_total_height = page_size_.height + page_gap_;

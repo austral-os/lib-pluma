@@ -2434,7 +2434,9 @@ void PlumaEditor::render(IRenderer& renderer) {
         }
 
         // Draw overlays for inactive regions to focus user
-        Color overlay_color = 0x77FFFFFF; // ~46% white
+        // We use the page background color with alpha so that the background itself
+        // doesn't change color, but the content fades into the background.
+        Color overlay_color = (0x88u << 24) | (page_bg_color_ & 0xFFFFFF);
         if (active_region_ == DocumentRegion::Header) {
             Twips body_start_y = page_margins_.top;
             if (!page->header_blocks.empty()) {

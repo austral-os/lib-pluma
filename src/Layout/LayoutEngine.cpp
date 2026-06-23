@@ -38,7 +38,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     const std::function<bool(int)>& has_header_cb,
     const std::function<bool(int)>& has_footer_cb,
     uint32_t logical_offset_base,
-    int override_page_number
+    int override_page_number,
+    bool force_header_space,
+    bool force_footer_space
 ) {
     std::vector<std::unique_ptr<PageBox>> pages;
     
@@ -84,9 +86,11 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         
         start_y = margins.top;
         if (header_h.getValue() > 0) start_y = start_y + header_h + Twips(240);
+        else if (force_header_space && has_header_cb && has_header_cb(page_idx)) start_y = start_y + Twips(240) + Twips(240);
         
         Twips bottom = margins.bottom;
         if (footer_h.getValue() > 0) bottom = bottom + footer_h + Twips(240);
+        else if (force_footer_space && has_footer_cb && has_footer_cb(page_idx)) bottom = bottom + Twips(240) + Twips(240);
         
         avail_height = Twips(page_size.height.getValue() - start_y.getValue() - bottom.getValue());
     };

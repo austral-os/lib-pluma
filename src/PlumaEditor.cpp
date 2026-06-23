@@ -1763,7 +1763,11 @@ void PlumaEditor::updateLayout() {
         footer_doc_.document.getText(),
         &footer_doc_.format_registry,
         has_header,
-        has_footer
+        has_footer,
+        0, // logical_offset_base
+        -1, // override_page_number
+        active_region_ == DocumentRegion::Header, // force_header_space
+        active_region_ == DocumentRegion::Footer  // force_footer_space
     );
     updateCursorState();
 }
@@ -2074,6 +2078,8 @@ void PlumaEditor::render(IRenderer& renderer) {
             }
             if (!page->header_blocks.empty()) {
                 m_top = m_top + header_h_only + Twips(240);
+            } else if (active_region_ == DocumentRegion::Header) {
+                m_top = m_top + Twips(240) + Twips(240); // Fake header + gap
             }
             
             Twips m_bottom = page_margins_.bottom;
@@ -2083,6 +2089,8 @@ void PlumaEditor::render(IRenderer& renderer) {
             }
             if (!page->footer_blocks.empty()) {
                 m_bottom = m_bottom + footer_h_only + Twips(240);
+            } else if (active_region_ == DocumentRegion::Footer) {
+                m_bottom = m_bottom + Twips(240) + Twips(240); // Fake footer + gap
             }
 
             Twips w = page->getBounds().width;
@@ -2111,10 +2119,11 @@ void PlumaEditor::render(IRenderer& renderer) {
             ));
 
             // Header border
-            if (!page->header_blocks.empty()) {
+            if (!page->header_blocks.empty() || active_region_ == DocumentRegion::Header) {
                 Twips hy = page_margins_.top;
                 Twips h_w = w - m_left - m_right;
                 Twips h_h = header_h_only;
+                if (h_h.getValue() == 0) h_h = Twips(240); // Default 1 line height if empty
                 // Top
                 display_list.addCommand(std::make_unique<FillRectCommand>(
                     Rect{page_rect.x + m_left - viewport_x_, current_page_y + hy - viewport_y_, h_w, t}, margin_color_));
@@ -2130,10 +2139,11 @@ void PlumaEditor::render(IRenderer& renderer) {
             }
 
             // Footer border
-            if (!page->footer_blocks.empty()) {
-                Twips fy = h - page_margins_.bottom - footer_h_only;
-                Twips f_w = w - m_left - m_right;
+            if (!page->footer_blocks.empty() || active_region_ == DocumentRegion::Footer) {
                 Twips f_h = footer_h_only;
+                if (f_h.getValue() == 0) f_h = Twips(240); // Default 1 line height if empty
+                Twips fy = h - page_margins_.bottom - f_h;
+                Twips f_w = w - m_left - m_right;
                 // Top
                 display_list.addCommand(std::make_unique<FillRectCommand>(
                     Rect{page_rect.x + m_left - viewport_x_, current_page_y + fy - viewport_y_, f_w, t}, margin_color_));

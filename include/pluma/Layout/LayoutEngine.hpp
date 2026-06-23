@@ -52,7 +52,9 @@ public:
         const std::function<bool(int)>& has_header_cb = nullptr,
         const std::function<bool(int)>& has_footer_cb = nullptr,
         uint32_t logical_offset_base = 0,
-        int override_page_number = -1
+        int override_page_number = -1,
+        bool force_header_space = false,
+        bool force_footer_space = false
     );
 
 private:

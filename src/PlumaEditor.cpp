@@ -1902,9 +1902,10 @@ void PlumaEditor::render(IRenderer& renderer) {
                 Twips ch = cell->getBounds().height;
                 
                 Twips thick(15); // 1px
-                uint8_t r8 = (default_text_color_ >> 16) & 0xFF;
-                uint8_t g8 = (default_text_color_ >>  8) & 0xFF;
-                uint8_t b8 = (default_text_color_      ) & 0xFF;
+                Color eff_text_color = is_printing_ ? Color(0xFF000000) : default_text_color_;
+                uint8_t r8 = (eff_text_color >> 16) & 0xFF;
+                uint8_t g8 = (eff_text_color >>  8) & 0xFF;
+                uint8_t b8 = (eff_text_color      ) & 0xFF;
                 Color bcol = (0x99u << 24) | (r8 << 16) | (g8 << 8) | b8; // ~60% alpha
                 
                 auto style = active_doc_->format_registry.getStyleAt(cell->logical_offset);
@@ -1988,7 +1989,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                     display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx, cy, cw, ch}, selection_color_));
                 }
 
-                Color cell_default_text_color = default_text_color_;
+                Color cell_default_text_color = is_printing_ ? Color(0xFF000000) : default_text_color_;
 
                 for (const auto& cell_block : cell->blocks) {
                     for (const auto& cell_line : cell_block->lines) {
@@ -2160,7 +2161,7 @@ void PlumaEditor::render(IRenderer& renderer) {
         // Draw page background
         display_list.addCommand(std::make_unique<FillRectCommand>(
             Rect{page_rect.x - viewport_x_, page_rect.y - viewport_y_, page_rect.width, page_rect.height},
-            page_bg_color_
+            is_printing_ ? Color(0xFFFFFFFF) : page_bg_color_
         ));
 
         if (show_margins_) {
@@ -2268,7 +2269,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                 // Draw horizontal line in the middle of the block
                 Twips line_y = block_rect.y + Twips(block_rect.height.getValue() / 2);
                 Rect hline_rect{block_rect.x, line_y, block_rect.width, Twips(20)}; // 20 twips ~ 1.3px
-                display_list.addCommand(std::make_unique<FillRectCommand>(hline_rect, default_text_color_));
+                display_list.addCommand(std::make_unique<FillRectCommand>(hline_rect, is_printing_ ? Color(0xFF000000) : default_text_color_));
                 return;
             }
 
@@ -2306,7 +2307,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                     current_justify_offset = current_justify_offset + justify_gap;
                     
                     // Extract styles
-                    uint32_t text_color = default_text_color_;
+                    uint32_t text_color = is_printing_ ? Color(0xFF000000) : default_text_color_;
                     if (auto c = run->style.get(PropertyId::TextColor)) {
                         text_color = std::get<Color>(*c);
                     }
@@ -2432,7 +2433,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                     marker_run,
                     block->list_marker,
                     run_font,
-                    default_text_color_
+                    is_printing_ ? Color(0xFF000000) : default_text_color_
                 ));
             }
             
@@ -2441,7 +2442,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                 Twips dc_abs_y = block_rect.y + block->drop_cap->getBounds().y - viewport_y_;
                 Rect dc_rect{dc_abs_x, dc_abs_y, block->drop_cap->getBounds().width, block->drop_cap->getBounds().height};
                 
-                uint32_t text_color = default_text_color_;
+                uint32_t text_color = is_printing_ ? Color(0xFF000000) : default_text_color_;
                 if (auto tc = block->drop_cap->style.get(PropertyId::TextColor)) {
                     text_color = std::get<uint32_t>(*tc);
                 }
@@ -2539,38 +2540,40 @@ void PlumaEditor::render(IRenderer& renderer) {
             render_block(block.get(), page_rect.x, current_page_y + block->getBounds().y);
         }
 
-        // Draw overlays for inactive regions to focus user
-        // We use the page background color with alpha so that the background itself
-        // doesn't change color, but the content fades into the background.
-        Color overlay_color = (0x88u << 24) | (page_bg_color_ & 0xFFFFFF);
-        if (active_region_ == DocumentRegion::Header) {
-            Twips body_start_y = page_margins_.top;
-            if (!page->header_blocks.empty()) {
-                body_start_y = page->header_blocks.back()->getBounds().y + page->header_blocks.back()->getBounds().height;
-            }
-            display_list.addCommand(std::make_unique<FillRectCommand>(
-                Rect{page_rect.x - viewport_x_, current_page_y + body_start_y - viewport_y_, page->getBounds().width, page->getBounds().height - body_start_y}, 
-                overlay_color));
-        } else if (active_region_ == DocumentRegion::Footer) {
-            Twips footer_start_y = Twips(page->getBounds().height.getValue() - page_margins_.bottom.getValue());
-            if (!page->footer_blocks.empty()) {
-                footer_start_y = page->footer_blocks.front()->getBounds().y;
-            }
-            display_list.addCommand(std::make_unique<FillRectCommand>(
-                Rect{page_rect.x - viewport_x_, current_page_y - viewport_y_, page->getBounds().width, footer_start_y}, 
-                overlay_color));
-        } else if (active_region_ == DocumentRegion::Body) {
-            if (!page->header_blocks.empty()) {
-                Twips header_end_y = page->header_blocks.back()->getBounds().y + page->header_blocks.back()->getBounds().height;
+        if (!is_printing_) {
+            // Draw overlays for inactive regions to focus user
+            // We use the page background color with alpha so that the background itself
+            // doesn't change color, but the content fades into the background.
+            Color overlay_color = (0x88u << 24) | (page_bg_color_ & 0xFFFFFF);
+            if (active_region_ == DocumentRegion::Header) {
+                Twips body_start_y = page_margins_.top;
+                if (!page->header_blocks.empty()) {
+                    body_start_y = page->header_blocks.back()->getBounds().y + page->header_blocks.back()->getBounds().height;
+                }
                 display_list.addCommand(std::make_unique<FillRectCommand>(
-                    Rect{page_rect.x - viewport_x_, current_page_y - viewport_y_, page->getBounds().width, header_end_y}, 
+                    Rect{page_rect.x - viewport_x_, current_page_y + body_start_y - viewport_y_, page->getBounds().width, page->getBounds().height - body_start_y}, 
                     overlay_color));
-            }
-            if (!page->footer_blocks.empty()) {
-                Twips footer_start_y = page->footer_blocks.front()->getBounds().y;
+            } else if (active_region_ == DocumentRegion::Footer) {
+                Twips footer_start_y = Twips(page->getBounds().height.getValue() - page_margins_.bottom.getValue());
+                if (!page->footer_blocks.empty()) {
+                    footer_start_y = page->footer_blocks.front()->getBounds().y;
+                }
                 display_list.addCommand(std::make_unique<FillRectCommand>(
-                    Rect{page_rect.x - viewport_x_, current_page_y + footer_start_y - viewport_y_, page->getBounds().width, page->getBounds().height - footer_start_y}, 
+                    Rect{page_rect.x - viewport_x_, current_page_y - viewport_y_, page->getBounds().width, footer_start_y}, 
                     overlay_color));
+            } else if (active_region_ == DocumentRegion::Body) {
+                if (!page->header_blocks.empty()) {
+                    Twips header_end_y = page->header_blocks.back()->getBounds().y + page->header_blocks.back()->getBounds().height;
+                    display_list.addCommand(std::make_unique<FillRectCommand>(
+                        Rect{page_rect.x - viewport_x_, current_page_y - viewport_y_, page->getBounds().width, header_end_y}, 
+                        overlay_color));
+                }
+                if (!page->footer_blocks.empty()) {
+                    Twips footer_start_y = page->footer_blocks.front()->getBounds().y;
+                    display_list.addCommand(std::make_unique<FillRectCommand>(
+                        Rect{page_rect.x - viewport_x_, current_page_y + footer_start_y - viewport_y_, page->getBounds().width, page->getBounds().height - footer_start_y}, 
+                        overlay_color));
+                }
             }
         }
 
@@ -2621,7 +2624,7 @@ void PlumaEditor::render(IRenderer& renderer) {
             caret.y = caret.y - viewport_y_;
             
             // Determine Color
-            Color active_caret_color = default_text_color_;
+            Color active_caret_color = is_printing_ ? Color(0xFF000000) : default_text_color_;
             if (caret_color_.has_value()) {
                 active_caret_color = *caret_color_;
             } else {

@@ -527,6 +527,8 @@ private:
     int active_table_col_{-1};
     int active_table_row_{-1};
     
+    int last_known_total_pages_{-1};
+
 public:
     bool isInTable() const { return active_table_offset_.has_value(); }
 

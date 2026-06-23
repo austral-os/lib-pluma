@@ -54,7 +54,8 @@ public:
         uint32_t logical_offset_base = 0,
         int override_page_number = -1,
         bool force_header_space = false,
-        bool force_footer_space = false
+        bool force_footer_space = false,
+        int total_pages = -1
     );
 
 private:

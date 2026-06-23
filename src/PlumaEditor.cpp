@@ -1775,7 +1775,8 @@ void PlumaEditor::updateLayout() {
         0, // logical_offset_base
         -1, // override_page_number
         active_region_ == DocumentRegion::Header, // force_header_space
-        active_region_ == DocumentRegion::Footer  // force_footer_space
+        active_region_ == DocumentRegion::Footer,  // force_footer_space
+        last_known_total_pages_
     );
     updateCursorState();
 }
@@ -2106,9 +2107,10 @@ void PlumaEditor::render(IRenderer& renderer) {
             row_idx++;
         }
     };
-
     Twips current_page_y(page_gap_);
-    for (const auto& page : current_pages_) {
+    int actual_total_pages = (int)current_pages_.size();
+    for (size_t page_idx = 0; page_idx < current_pages_.size(); ++page_idx) {
+        auto& page = current_pages_[page_idx];
         Twips page_x = Twips(std::max(0, (width_.getValue() - page->getBounds().width.getValue()) / 2));
         Rect page_rect{page_x, current_page_y, page->getBounds().width, page->getBounds().height};
         
@@ -2116,6 +2118,43 @@ void PlumaEditor::render(IRenderer& renderer) {
         if (!viewport_rect.intersects(page_rect)) {
             current_page_y = current_page_y + page->getBounds().height + page_gap_;
             continue;
+        }
+
+        // Lazy re-layout of header and footer if total_pages changed (needed for PAGECOUNT field)
+        if (page->laid_out_total_pages != actual_total_pages) {
+            page->laid_out_total_pages = actual_total_pages;
+            
+            auto has_header = [this](int page_num) { return getPageStyle(page_num).has_header; };
+            auto has_footer = [this](int page_num) { return getPageStyle(page_num).has_footer; };
+            
+            if (has_header(page_idx + 1) && !header_doc_.document.getText().empty()) {
+                auto h_pages = layout_engine_.layoutText(
+                    header_doc_.document.getText(), page_size_, page_margins_, header_doc_.format_registry,
+                    "", nullptr, "", nullptr, nullptr, nullptr, 0, page_idx + 1, false, false, actual_total_pages);
+                if (!h_pages.empty()) {
+                    page->header_blocks = std::move(h_pages[0]->blocks);
+                    Twips h_y(page_margins_.top);
+                    for (auto& b : page->header_blocks) {
+                        b->setBounds({b->getBounds().x, h_y, b->getBounds().width, b->getBounds().height});
+                        h_y = h_y + b->getBounds().height;
+                    }
+                }
+            }
+            if (has_footer(page_idx + 1) && !footer_doc_.document.getText().empty()) {
+                auto f_pages = layout_engine_.layoutText(
+                    footer_doc_.document.getText(), page_size_, page_margins_, footer_doc_.format_registry,
+                    "", nullptr, "", nullptr, nullptr, nullptr, 0, page_idx + 1, false, false, actual_total_pages);
+                if (!f_pages.empty()) {
+                    page->footer_blocks = std::move(f_pages[0]->blocks);
+                    Twips footer_content_height(0);
+                    for (auto& b : page->footer_blocks) footer_content_height = footer_content_height + b->getBounds().height;
+                    Twips f_y = page_size_.height - page_margins_.bottom - footer_content_height;
+                    for (auto& b : page->footer_blocks) {
+                        b->setBounds({b->getBounds().x, f_y, b->getBounds().width, b->getBounds().height});
+                        f_y = f_y + b->getBounds().height;
+                    }
+                }
+            }
         }
 
         // Draw page background

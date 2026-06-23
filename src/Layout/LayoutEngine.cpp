@@ -40,7 +40,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     uint32_t logical_offset_base,
     int override_page_number,
     bool force_header_space,
-    bool force_footer_space
+    bool force_footer_space,
+    int total_pages
 ) {
     std::vector<std::unique_ptr<PageBox>> pages;
     
@@ -50,6 +51,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     
     auto setup_page = [&](std::unique_ptr<PageBox>& page, int page_idx, Twips& start_y, Twips& avail_height) {
         page = std::make_unique<PageBox>();
+        page->laid_out_total_pages = total_pages;
         page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
         Twips header_h(0), footer_h(0);
         
@@ -428,7 +430,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1));
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1), false, false, total_pages);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -471,7 +473,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
                         
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1));
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1), false, false, total_pages);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -528,7 +530,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
                         
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1));
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1), false, false, total_pages);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -979,6 +981,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     display_text = user ? user : "User";
                 } else if (word == "|FIELD:PAGE|") {
                     display_text = std::to_string(override_page_number > 0 ? override_page_number : (pages.size() + 1));
+                } else if (word == "|FIELD:PAGECOUNT|") {
+                    display_text = total_pages > 0 ? std::to_string(total_pages) : "?";
                 }
             }
 

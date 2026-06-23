@@ -264,9 +264,11 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
         active_doc_->undo_manager.beginTransaction();
     }
 
-    if (table_selection_.mode != TableSelectionMode::None) {
+    bool is_table_prop = (id >= PropertyId::TableWidth && id <= PropertyId::BorderLeftStyle);
+
+    if (table_selection_.mode != TableSelectionMode::None || (active_table_offset_.has_value() && is_table_prop)) {
         std::string doc_text = active_doc_->document.getText();
-        uint32_t offset = table_selection_.table_offset;
+        uint32_t offset = table_selection_.mode != TableSelectionMode::None ? table_selection_.table_offset : *active_table_offset_;
         
         int current_row = -1;
         int current_col = -1;
@@ -331,6 +333,11 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
                     int max_col = std::max(c1, c2);
                     
                     if (current_row >= min_row && current_row <= max_row && current_col >= min_col && current_col <= max_col) {
+                        is_selected = true;
+                    }
+                }
+                else if (table_selection_.mode == TableSelectionMode::None && active_table_offset_.has_value() && is_table_prop) {
+                    if (current_row == active_table_row_ && current_col == active_table_col_) {
                         is_selected = true;
                     }
                 }

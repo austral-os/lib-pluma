@@ -1245,14 +1245,21 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                 Twips half_line(90);
                 Twips target_y = Twips(std::max(0, rect->y.getValue() - half_line.getValue()));
-                if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
-                    if (*new_offset != active_doc_->selection.head) {
-                        active_doc_->selection.head = snapNearest(*new_offset);
-                        if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
-                        updateCursorState();
-                        break;
+                bool moved = false;
+                for (int step = 0; step < 10; ++step) {
+                    if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
+                        if (*new_offset != active_doc_->selection.head) {
+                            active_doc_->selection.head = snapNearest(*new_offset);
+                            if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
+                            updateCursorState();
+                            moved = true;
+                            break;
+                        }
                     }
+                    if (target_y.getValue() <= 0) break;
+                    target_y = Twips(std::max(0, target_y.getValue() - 90));
                 }
+                if (moved) break;
                 // Fallback: if physical resolution didn't move us, check for a table
                 // block just above target_y (which was skipped because y is in the gap).
                 // We mirror resolvePhysicalToLogical's page/block iteration to find
@@ -1296,12 +1303,16 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                 // Land in the middle of the line below
                 Twips target_y = rect->y + rect->height + Twips(rect->height.getValue() / 2);
-                if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
-                    if (*new_offset != active_doc_->selection.head) {
-                        active_doc_->selection.head = snapNearest(*new_offset);
-                        if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
-                        updateCursorState();
+                for (int step = 0; step < 10; ++step) {
+                    if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
+                        if (*new_offset != active_doc_->selection.head) {
+                            active_doc_->selection.head = snapNearest(*new_offset);
+                            if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
+                            updateCursorState();
+                            break;
+                        }
                     }
+                    target_y = target_y + Twips(90);
                 }
             }
             break;
@@ -1342,7 +1353,8 @@ static bool isTableMarker(const std::string& para) {
 
 static bool isPageMarker(const std::string& para) {
     return (para.length() >= 11 && para.substr(0, 11) == "|PAGEBREAK|") || 
-           (para.length() >= 11 && para.substr(0, 11) == "|BLANKPAGE|");
+           (para.length() >= 11 && para.substr(0, 11) == "|BLANKPAGE|") ||
+           (para == "|HLINE|");
 }
 
 static uint32_t skipTableMarker(const std::string& doc_text, uint32_t pos) {
@@ -2146,6 +2158,14 @@ void PlumaEditor::render(IRenderer& renderer) {
                 return;
             }
 
+            if (block->is_horizontal_line) {
+                // Draw horizontal line in the middle of the block
+                Twips line_y = block_rect.y + Twips(block_rect.height.getValue() / 2);
+                Rect hline_rect{block_rect.x, line_y, block_rect.width, Twips(20)}; // 20 twips ~ 1.3px
+                display_list.addCommand(std::make_unique<FillRectCommand>(hline_rect, default_text_color_));
+                return;
+            }
+
             for (const auto& line : block->lines) {
                 // Apply Paragraph Alignment
                 Twips remaining_space = Twips(block->getBounds().width.getValue() - line->getBounds().width.getValue());
@@ -2622,6 +2642,10 @@ void PlumaEditor::insertTableRowBelow() {
         active_doc_->undo_manager.commitTransaction();
         updateLayout();
     }
+}
+
+void PlumaEditor::insertHorizontalLine() {
+    insertTextAtCursor("\n|HLINE|\n");
 }
 
 void PlumaEditor::insertTableColumnLeft() {

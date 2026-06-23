@@ -108,6 +108,7 @@ public:
     Twips list_indent{0};                        ///< Indentation for list item
     
     TextAlign alignment{TextAlign::Left};        ///< Paragraph alignment.
+    bool is_horizontal_line{false};              ///< Whether this block is a full-width horizontal line
 };
 
 /**

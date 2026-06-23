@@ -342,6 +342,11 @@ public:
     void setFooter(const std::string& footer);
 
     /**
+     * @brief Inserts a horizontal line at the current cursor position.
+     */
+    void insertHorizontalLine();
+
+    /**
      * @brief Deletes the currently selected text.
      */
     void deleteSelection();

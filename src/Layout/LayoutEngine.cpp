@@ -621,6 +621,17 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             continue;
         }
 
+        if (para.length() >= 7 && para.substr(0, 7) == "|HLINE|") {
+            auto block = std::make_unique<BlockBox>();
+            block->is_horizontal_line = true;
+            Twips line_height = Twips(240); // Standard spacing around the line
+            block->setBounds({column_start_y, current_page_y, content_width, line_height});
+            current_page_y = current_page_y + line_height + Twips(120); // add some margin
+            current_page->blocks.push_back(std::move(block));
+            logical_offset += para.length() + 1;
+            continue;
+        }
+
         {
             if (para.length() >= 7 && para.substr(0, 7) == "|IMAGE:") {
                 size_t end_tag = para.find("|", 7);

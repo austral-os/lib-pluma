@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cmath>
+#include <ctime>
 
 #include <pluma/Layout/LayoutEngine.hpp>
 #include <sstream>
@@ -886,18 +887,56 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             }
 
             size_t run_end = start;
-            while (run_end < para.length() && para[run_end] != ' ' && para[run_end] != '\v') {
-                PropertyBag next_style = registry.getStyleAt(logical_offset_base + logical_offset + run_end);
-                if (!stylesAreEqual(word_style, next_style)) {
-                    break;
+            bool is_field = false;
+            if (para.length() >= start + 7 && para.substr(start, 7) == "|FIELD:") {
+                size_t field_end = para.find("|", start + 7);
+                if (field_end != std::string::npos) {
+                    run_end = field_end + 1;
+                    is_field = true;
                 }
-                run_end++;
             }
 
-            bool has_space_after = (run_end < para.length() && para[run_end] == ' ');
+            if (!is_field) {
+                while (run_end < para.length() && para[run_end] != ' ' && para[run_end] != '\v') {
+                    if (para.length() >= run_end + 7 && para.substr(run_end, 7) == "|FIELD:") break;
+
+                    PropertyBag next_style = registry.getStyleAt(logical_offset_base + logical_offset + run_end);
+                    if (!stylesAreEqual(word_style, next_style)) {
+                        break;
+                    }
+                    run_end++;
+                }
+            }
+
+            bool has_space_after = (!is_field && run_end < para.length() && para[run_end] == ' ');
 
             std::string word = para.substr(start, run_end - start);
-            if (has_space_after) word += " ";
+            std::string display_text = word;
+
+            if (is_field) {
+                if (word == "|FIELD:DATE|") {
+                    auto t = std::time(nullptr);
+                    auto tm = *std::localtime(&t);
+                    char buf[64];
+                    std::strftime(buf, sizeof(buf), "%d/%m/%Y", &tm);
+                    display_text = buf;
+                } else if (word == "|FIELD:TIME|") {
+                    auto t = std::time(nullptr);
+                    auto tm = *std::localtime(&t);
+                    char buf[64];
+                    std::strftime(buf, sizeof(buf), "%H:%M", &tm);
+                    display_text = buf;
+                } else if (word == "|FIELD:TITLE|") {
+                    display_text = "Untitled Document";
+                } else if (word == "|FIELD:AUTHOR|") {
+                    const char* user = std::getenv("USER");
+                    display_text = user ? user : "User";
+                } else if (word == "|FIELD:PAGE|") {
+                    display_text = std::to_string(pages.size() + 1);
+                }
+            } else if (has_space_after) {
+                display_text += " ";
+            }
 
             FontDescriptor desc = font_->getDescriptor();
             if (auto fs = word_style.get(PropertyId::FontSize)) desc.size_pt = std::get<float>(*fs);
@@ -913,7 +952,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             }
             
             auto run_font = std::make_shared<DummyFont>(desc);
-            ShapedTextRun run = shaper_->shapeText(word, run_font);
+            ShapedTextRun run = shaper_->shapeText(display_text, run_font);
             Twips word_width = run.total_width;
 
             auto push_past_masks = [&](Twips& word_x, Twips y_top, Twips word_w, Twips word_h) {
@@ -1052,6 +1091,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             auto run_box = std::make_unique<RunBox>();
             run_box->run = std::move(run);
             run_box->logical_text = word;
+            run_box->display_text = display_text;
             run_box->logical_offset = logical_offset_base + logical_offset + start;
             run_box->style = std::move(word_style);
             run_box->setBounds({current_x, Twips(0), word_width, run_box->run.max_ascent + run_box->run.max_descent});

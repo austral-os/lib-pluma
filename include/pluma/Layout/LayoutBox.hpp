@@ -74,6 +74,7 @@ public:
 
     ShapedTextRun run;      ///< The shaped glyphs and metrics.
     std::string logical_text; ///< The raw text underlying this run.
+    std::string display_text; ///< The actual text to render (e.g. for dynamic fields).
     uint32_t logical_offset;  ///< The document offset where this run begins.
     PropertyBag style;        ///< The rich text styles applied to this run.
 };

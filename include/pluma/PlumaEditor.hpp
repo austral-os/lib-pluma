@@ -168,6 +168,18 @@ public:
     /**
      * @brief Sets the background color of the page canvas.
      */
+    void setSelectionBackgroundColor(Color color);
+    Color getSelectionBackgroundColor() const { return selection_color_; }
+
+    /**
+     * @brief Determines if a logical offset falls inside a protected tag (e.g. |FIELD:PAGE|)
+     * @return A pair of {start_offset, length} if protected, std::nullopt otherwise.
+     */
+    std::optional<std::pair<uint32_t, uint32_t>> getProtectedTagBounds(uint32_t logical_offset) const;
+
+    /**
+     * @brief Sets the background color of the page canvas.
+     */
     void setPageBackgroundColor(Color color);
     Color getPageBackgroundColor() const { return page_bg_color_; }
 
@@ -279,14 +291,7 @@ public:
     /**
      * @brief Programmatically selects a range of text.
      */
-    void setSelection(uint32_t anchor, uint32_t head) {
-        selection_.anchor = anchor;
-        selection_.head = head;
-        // Deselect table/image just in case
-        table_selection_.mode = TableSelectionMode::None;
-        selected_image_offset_ = std::nullopt;
-        updateCursorState();
-    }
+    void setSelection(uint32_t anchor, uint32_t head);
     
     void deleteSelectedImage();
     void deleteForward();
@@ -417,10 +422,11 @@ public:
      */
     void redo();
     
+    void updateLayout();
+
 private:
     void onEditorAction(EditorAction action, const std::string& text, ModifierFlags mods);
     void deleteBackward();
-    void updateLayout();
 
     PieceTable document_;
     FormatRegistry format_registry_;

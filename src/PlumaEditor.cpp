@@ -45,6 +45,63 @@ void PlumaEditor::setWorkspaceBackgroundColor(Color color) {
     workspace_bg_color_ = color;
 }
 
+std::optional<std::pair<uint32_t, uint32_t>> PlumaEditor::getProtectedTagBounds(uint32_t logical_offset) const {
+    std::string text = document_.getText();
+    if (text.empty() || logical_offset > text.length()) return std::nullopt;
+
+    // Check inline FIELD tags
+    uint32_t start_look = logical_offset > 15 ? logical_offset - 15 : 0;
+    for (uint32_t i = logical_offset; i >= start_look; --i) {
+        if (i < text.length() && text[i] == '|') {
+            if (i + 7 <= text.length() && text.substr(i, 7) == "|FIELD:") {
+                size_t end_idx = text.find("|", i + 7);
+                if (end_idx != std::string::npos && logical_offset > i && logical_offset < end_idx + 1) {
+                    return std::make_pair((uint32_t)i, (uint32_t)(end_idx + 1 - i));
+                }
+            }
+        }
+        if (i == 0) break;
+    }
+
+    // Check structural markers
+    uint32_t para_start = logical_offset;
+    if (para_start < text.length() && text[para_start] == '\n' && logical_offset > 0) para_start--;
+    while (para_start > 0 && text[para_start - 1] != '\n') para_start--;
+    
+    uint32_t para_end = para_start;
+    while (para_end < text.length() && text[para_end] != '\n') para_end++;
+    
+    std::string para = text.substr(para_start, para_end - para_start);
+    if (para.length() >= 11 && (para.substr(0, 11) == "|PAGEBREAK|" || para.substr(0, 11) == "|BLANKPAGE|")) {
+        if (logical_offset > para_start && logical_offset <= para_end) { // Including end to protect whole para
+            return std::make_pair(para_start, (uint32_t)(para_end - para_start));
+        }
+    }
+    return std::nullopt;
+}
+
+void PlumaEditor::setSelection(uint32_t anchor, uint32_t head) {
+    auto snap = [this](uint32_t offset) {
+        auto bounds = getProtectedTagBounds(offset);
+        if (bounds) {
+            uint32_t tag_start = bounds->first;
+            uint32_t tag_end = tag_start + bounds->second;
+            return (offset - tag_start < tag_end - offset) ? tag_start : tag_end;
+        }
+        return offset;
+    };
+    
+    selection_.anchor = snap(anchor);
+    selection_.head = snap(head);
+    table_selection_.mode = TableSelectionMode::None;
+    selected_image_offset_ = std::nullopt;
+    updateCursorState();
+}
+
+void PlumaEditor::setSelectionBackgroundColor(Color color) {
+    selection_color_ = color;
+}
+
 void PlumaEditor::setPageBackgroundColor(Color color) {
     page_bg_color_ = color;
 }
@@ -1345,6 +1402,23 @@ void PlumaEditor::deleteBackward() {
     if (!selection_.isCollapsed()) {
         deleteSelection();
     } else if (selection_.head > 0) {
+        auto bounds = getProtectedTagBounds(selection_.head - 1);
+        if (bounds) {
+            uint32_t tag_start = bounds->first;
+            uint32_t tag_len = bounds->second;
+            std::string doc_text = document_.getText();
+            if (doc_text.substr(tag_start, 7) == "|FIELD:") {
+                undo_manager_.beginTransaction();
+                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(tag_start, tag_len));
+                format_registry_.deleteText(tag_start, tag_len);
+                undo_manager_.commitTransaction();
+                selection_.head = selection_.anchor = tag_start;
+                updateLayout();
+                updateCursorState();
+                return;
+            }
+        }
+        
         uint32_t para_start = selection_.head;
         std::string doc_text = document_.getText();
         while (para_start > 0 && doc_text[para_start - 1] != '\n') {
@@ -1476,6 +1550,22 @@ void PlumaEditor::deleteForward() {
     } else if (selection_.head < document_.getLength()) {
         uint32_t start = selection_.head;
         std::string doc_text = document_.getText();
+        
+        auto bounds = getProtectedTagBounds(start);
+        if (bounds) {
+            uint32_t tag_start = bounds->first;
+            uint32_t tag_len = bounds->second;
+            if (doc_text.substr(tag_start, 7) == "|FIELD:") {
+                undo_manager_.beginTransaction();
+                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(tag_start, tag_len));
+                format_registry_.deleteText(tag_start, tag_len);
+                undo_manager_.commitTransaction();
+                selection_.head = selection_.anchor = tag_start;
+                updateLayout();
+                updateCursorState();
+                return;
+            }
+        }
         
         if (start + 7 <= doc_text.length() && doc_text.substr(start, 7) == "|IMAGE:") {
             size_t end_img = doc_text.find("|", start + 7);
@@ -1801,7 +1891,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                             display_list.addCommand(std::make_unique<DrawGlyphRunCommand>(
                                 run_rect,
                                 run->run,
-                                run->logical_text,
+                                run->display_text.empty() ? run->logical_text : run->display_text,
                                 run_font,
                                 text_color
                             ));
@@ -2013,7 +2103,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                     display_list.addCommand(std::make_unique<DrawGlyphRunCommand>(
                         run_rect_adj,
                         run->run,
-                        run->logical_text,
+                        run->display_text.empty() ? run->logical_text : run->display_text,
                         run_font,
                         text_color
                     ));
@@ -2114,7 +2204,7 @@ void PlumaEditor::render(IRenderer& renderer) {
                 display_list.addCommand(std::make_unique<DrawGlyphRunCommand>(
                     dc_rect,
                     block->drop_cap->run,
-                    block->drop_cap->logical_text,
+                    block->drop_cap->display_text.empty() ? block->drop_cap->logical_text : block->drop_cap->display_text,
                     run_font,
                     text_color
                 ));

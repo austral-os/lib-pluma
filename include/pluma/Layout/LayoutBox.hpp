@@ -139,6 +139,7 @@ public:
     int colspan = 1;
     int rowspan = 1;
     int col_idx = 0;
+    uint32_t logical_offset{0};
 };
 
 /**

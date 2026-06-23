@@ -490,6 +490,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 
                 current_cell = std::make_unique<TableCellBox>();
                 current_cell->col_idx = col_idx;
+                current_cell->logical_offset = logical_offset;
                 
                 // Parse colspan and rowspan
                 size_t c_pos = para.find("colspan=");

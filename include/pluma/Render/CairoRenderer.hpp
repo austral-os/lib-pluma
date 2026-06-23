@@ -22,6 +22,7 @@ public:
     explicit CairoRenderer(cairo_t* cr);
 
     void drawRect(const Rect& rect, Color color) override;
+    void drawLine(const Point& start, const Point& end, Twips thickness, Color color, int style_index) override;
     void drawGlyphRun(const Rect& rect, const ShapedTextRun& run, const std::string& text, std::shared_ptr<IFont> font, Color color) override;
     void drawImage(const Rect& rect, const std::string& path) override;
     void pushClip(const Rect& rect) override;

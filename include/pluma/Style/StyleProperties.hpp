@@ -67,15 +67,19 @@ enum class PropertyId {
     BorderTopVisible,
     BorderTopWidth,
     BorderTopColor,
+    BorderTopStyle,
     BorderRightVisible,
     BorderRightWidth,
     BorderRightColor,
+    BorderRightStyle,
     BorderBottomVisible,
     BorderBottomWidth,
     BorderBottomColor,
+    BorderBottomStyle,
     BorderLeftVisible,
     BorderLeftWidth,
     BorderLeftColor,
+    BorderLeftStyle,
     ImagePath,
     ImageWrapMode,
     ImageWidth,
@@ -140,15 +144,19 @@ inline bool inheritsByDefault(PropertyId id) {
         case PropertyId::BorderTopVisible:
         case PropertyId::BorderTopWidth:
         case PropertyId::BorderTopColor:
+        case PropertyId::BorderTopStyle:
         case PropertyId::BorderRightVisible:
         case PropertyId::BorderRightWidth:
         case PropertyId::BorderRightColor:
+        case PropertyId::BorderRightStyle:
         case PropertyId::BorderBottomVisible:
         case PropertyId::BorderBottomWidth:
         case PropertyId::BorderBottomColor:
+        case PropertyId::BorderBottomStyle:
         case PropertyId::BorderLeftVisible:
         case PropertyId::BorderLeftWidth:
         case PropertyId::BorderLeftColor:
+        case PropertyId::BorderLeftStyle:
         case PropertyId::ImagePath:
         case PropertyId::ImageWrapMode:
         case PropertyId::ImageWidth:

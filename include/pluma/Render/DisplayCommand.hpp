@@ -20,6 +20,7 @@ namespace pluma {
  */
 enum class CommandType {
     FillRect,
+    DrawLine,
     DrawGlyphRun,
     DrawImage,
     PushClip,
@@ -71,6 +72,34 @@ public:
 private:
     Rect rect_;
     Color color_;
+};
+
+/**
+ * @class DrawLineCommand
+ * @brief Command to draw a line with a specific style.
+ */
+class DrawLineCommand : public DisplayCommand {
+public:
+    DrawLineCommand(const Rect& rect, const Point& start, const Point& end, Twips thickness, Color color, int line_style)
+        : rect_(rect), start_(start), end_(end), thickness_(thickness), color_(color), line_style_(line_style) {}
+
+    CommandType getType() const override { return CommandType::DrawLine; }
+    Rect getBounds() const override { return rect_; }
+    void execute(IRenderer& renderer) const override { renderer.drawLine(start_, end_, thickness_, color_, line_style_); }
+
+    Point getStart() const { return start_; }
+    Point getEnd() const { return end_; }
+    Twips getThickness() const { return thickness_; }
+    Color getColor() const { return color_; }
+    int getLineStyle() const { return line_style_; }
+
+private:
+    Rect rect_;
+    Point start_;
+    Point end_;
+    Twips thickness_;
+    Color color_;
+    int line_style_;
 };
 
 /**

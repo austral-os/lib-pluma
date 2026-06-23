@@ -288,6 +288,7 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
             }
             
             if (is_cel || is_cel_col) {
+                uint32_t tag_start = offset;
                 current_col++;
                 if (is_cel) {
                     offset += 5;
@@ -301,7 +302,7 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
                     }
                 }
                 
-                uint32_t cell_start = offset;
+                uint32_t cell_start = tag_start;
                 
                 size_t next_cel = doc_text.find("\n|CEL|", offset);
                 size_t next_cel_col = doc_text.find("\n|CEL:", offset);
@@ -1898,23 +1899,58 @@ void PlumaEditor::render(IRenderer& renderer) {
                 uint8_t b8 = (default_text_color_      ) & 0xFF;
                 Color bcol = (0x99u << 24) | (r8 << 16) | (g8 << 8) | b8; // ~60% alpha
                 
+                auto style = active_doc_->format_registry.getStyleAt(cell->logical_offset);
+                
                 bool draw_top = true, draw_bottom = true, draw_left = true, draw_right = true;
                 if (table->hide_most_borders) {
                     if (is_printing_) {
                         draw_top = draw_left = draw_right = false;
-                        draw_bottom = (row_idx == 0); // Only bottom border of the first row
+                        draw_bottom = (row_idx == 0);
                     } else {
-                        // Lighter color for edit mode!
-                        bcol = (0x33u << 24) | (r8 << 16) | (g8 << 8) | b8; // ~20% alpha
                         draw_top = draw_left = draw_right = true;
                         draw_bottom = true;
                     }
                 }
 
-                if (draw_top) display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx, cy, cw, thick}, bcol));
-                if (draw_bottom) display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx, cy + ch - thick, cw, thick}, bcol));
-                if (draw_left) display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx, cy, thick, ch}, bcol));
-                if (draw_right) display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx + cw - thick, cy, thick, ch}, bcol));
+                Twips top_width(15);
+                Twips bottom_width(15);
+                Twips left_width(15);
+                Twips right_width(15);
+                
+                Color top_color = bcol;
+                Color bottom_color = bcol;
+                Color left_color = bcol;
+                Color right_color = bcol;
+                
+                int top_style = 0;
+                int bottom_style = 0;
+                int left_style = 0;
+                int right_style = 0;
+
+                if (auto l = style.get(pluma::PropertyId::BorderTopVisible)) draw_top = std::get<bool>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderBottomVisible)) draw_bottom = std::get<bool>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderLeftVisible)) draw_left = std::get<bool>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderRightVisible)) draw_right = std::get<bool>(*l);
+
+                if (auto l = style.get(pluma::PropertyId::BorderTopWidth)) top_width = Twips(std::get<float>(*l) * 15.0f);
+                if (auto l = style.get(pluma::PropertyId::BorderBottomWidth)) bottom_width = Twips(std::get<float>(*l) * 15.0f);
+                if (auto l = style.get(pluma::PropertyId::BorderLeftWidth)) left_width = Twips(std::get<float>(*l) * 15.0f);
+                if (auto l = style.get(pluma::PropertyId::BorderRightWidth)) right_width = Twips(std::get<float>(*l) * 15.0f);
+
+                if (auto l = style.get(pluma::PropertyId::BorderTopColor)) top_color = std::get<Color>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderBottomColor)) bottom_color = std::get<Color>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderLeftColor)) left_color = std::get<Color>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderRightColor)) right_color = std::get<Color>(*l);
+
+                if (auto l = style.get(pluma::PropertyId::BorderTopStyle)) top_style = std::get<int>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderBottomStyle)) bottom_style = std::get<int>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderLeftStyle)) left_style = std::get<int>(*l);
+                if (auto l = style.get(pluma::PropertyId::BorderRightStyle)) right_style = std::get<int>(*l);
+
+                if (draw_top) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx, cy, cw, thick}, Point{cx, cy}, Point{cx + cw, cy}, top_width, top_color, top_style));
+                if (draw_bottom) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx, cy + ch, cw, thick}, Point{cx, cy + ch}, Point{cx + cw, cy + ch}, bottom_width, bottom_color, bottom_style));
+                if (draw_left) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx, cy, thick, ch}, Point{cx, cy}, Point{cx, cy + ch}, left_width, left_color, left_style));
+                if (draw_right) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx + cw, cy, thick, ch}, Point{cx + cw, cy}, Point{cx + cw, cy + ch}, right_width, right_color, right_style));
 
                 bool is_selected = false;
                 if (table_selection_.mode != TableSelectionMode::None && table_selection_.table_offset == table->logical_offset) {

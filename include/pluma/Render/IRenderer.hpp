@@ -28,6 +28,16 @@ public:
     virtual void drawRect(const Rect& rect, Color color) = 0;
 
     /**
+     * @brief Draws a line with a given thickness and style.
+     * @param start Starting point in twips.
+     * @param end Ending point in twips.
+     * @param thickness Line thickness in twips.
+     * @param color ARGB color format.
+     * @param style_index Style (0: solid, 1: dashed, 2: dotted, 3: dash-dot, 4: dash-dot-dot, 5: double)
+     */
+    virtual void drawLine(const Point& start, const Point& end, Twips thickness, Color color, int style_index) = 0;
+
+    /**
      * @brief Draws a shaped run of text glyphs.
      * @param rect The bounding rect of the text.
      * @param run The shaped text run.

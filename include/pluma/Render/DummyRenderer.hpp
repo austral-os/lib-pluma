@@ -23,6 +23,11 @@ public:
         log.push_back("drawRect " + std::to_string(rect.x.getValue()) + " " + std::to_string(rect.y.getValue()));
     }
 
+    void drawLine(const Point& start, const Point& end, Twips thickness, Color color, int style_index) override {
+        (void)start; (void)end; (void)thickness; (void)color; (void)style_index;
+        log.push_back("drawLine");
+    }
+
     void drawGlyphRun(const Rect& rect, const ShapedTextRun& run, const std::string& text, std::shared_ptr<IFont> font, Color color) override {
         (void)rect;
         (void)text;

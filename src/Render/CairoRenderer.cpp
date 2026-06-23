@@ -36,6 +36,38 @@ void CairoRenderer::drawRect(const Rect& rect, Color color) {
     cairo_fill(cr_);
 }
 
+void CairoRenderer::drawLine(const Point& start, const Point& end, Twips thickness, Color color, int style_index) {
+    setCairoColor(color);
+    cairo_set_line_width(cr_, twipsToPixels(thickness));
+    cairo_set_line_cap(cr_, CAIRO_LINE_CAP_SQUARE);
+
+    if (style_index == 1) { // Dashed
+        double dashes[] = {4.0, 4.0};
+        cairo_set_dash(cr_, dashes, 2, 0);
+    } else if (style_index == 2) { // Dotted
+        double dashes[] = {1.0, 3.0};
+        cairo_set_dash(cr_, dashes, 2, 0);
+    } else if (style_index == 3) { // Dash-dot
+        double dashes[] = {4.0, 2.0, 1.0, 2.0};
+        cairo_set_dash(cr_, dashes, 4, 0);
+    } else if (style_index == 4) { // Dash-dot-dot
+        double dashes[] = {4.0, 2.0, 1.0, 2.0, 1.0, 2.0};
+        cairo_set_dash(cr_, dashes, 6, 0);
+    } else if (style_index == 5) { // Double (stub: draw thicker for now, ideally 2 lines)
+        cairo_set_line_width(cr_, twipsToPixels(thickness) * 2);
+        cairo_set_dash(cr_, nullptr, 0, 0);
+    } else {
+        cairo_set_dash(cr_, nullptr, 0, 0);
+    }
+
+    cairo_move_to(cr_, twipsToPixels(start.x), twipsToPixels(start.y));
+    cairo_line_to(cr_, twipsToPixels(end.x), twipsToPixels(end.y));
+    cairo_stroke(cr_);
+    
+    // Reset dash
+    cairo_set_dash(cr_, nullptr, 0, 0);
+}
+
 void CairoRenderer::drawGlyphRun(const Rect& rect, const ShapedTextRun& run, const std::string& text, std::shared_ptr<IFont> font, Color color) {
     (void)run;
     (void)font;

@@ -93,14 +93,19 @@ std::optional<Rect>
 CaretResolver::resolveLogicalToPhysical(
     const std::vector<std::unique_ptr<PageBox>>& pages,
     uint32_t logical_offset,
-    Twips page_gap)
+    Twips page_gap,
+    DocumentRegion region)
 {
     Twips current_page_y(page_gap);
 
     for (const auto& page : pages) {
         Twips current_block_y = current_page_y + page->getBounds().y;
 
-        for (const auto& block : page->blocks) {
+        const auto* blocks_ptr = &page->blocks;
+        if (region == DocumentRegion::Header) blocks_ptr = &page->header_blocks;
+        else if (region == DocumentRegion::Footer) blocks_ptr = &page->footer_blocks;
+        
+        for (const auto& block : *blocks_ptr) {
             Twips block_abs_y = current_block_y + block->getBounds().y;
 
             // ── Table cells ────────────────────────────────────────────────
@@ -307,7 +312,8 @@ std::optional<uint32_t>
 CaretResolver::resolvePhysicalToLogical(
     const std::vector<std::unique_ptr<PageBox>>& pages,
     Twips x, Twips y,
-    Twips page_gap)
+    Twips page_gap,
+    DocumentRegion region)
 {
     if (pages.empty()) return 0;
 
@@ -321,12 +327,16 @@ CaretResolver::resolvePhysicalToLogical(
         }
 
         Twips current_block_y = current_page_y + page->getBounds().y;
-        for (const auto& block : page->blocks) {
+        const auto* blocks_ptr = &page->blocks;
+        if (region == DocumentRegion::Header) blocks_ptr = &page->header_blocks;
+        else if (region == DocumentRegion::Footer) blocks_ptr = &page->footer_blocks;
+        
+        for (const auto& block : *blocks_ptr) {
             Twips block_abs_y = current_block_y + block->getBounds().y;
 
             Twips block_abs_x = block->getBounds().x;
 
-            bool is_last_block = (&block == &page->blocks.back());
+            bool is_last_block = (&block == &blocks_ptr->back());
             if (y.getValue() >= (block_abs_y + block->getBounds().height).getValue()
                 && !is_last_block)
                 continue;
@@ -339,13 +349,18 @@ CaretResolver::resolvePhysicalToLogical(
     }
 
     // Fallback: end of document
-    if (!pages.empty() &&
-        !pages.back()->blocks.empty() &&
-        !pages.back()->blocks.back()->lines.empty() &&
-        !pages.back()->blocks.back()->lines.back()->runs.empty())
-    {
-        auto& last_run = pages.back()->blocks.back()->lines.back()->runs.back();
-        return last_run->logical_offset + last_run->logical_text.length();
+    if (!pages.empty()) {
+        const auto* blocks_ptr = &pages.back()->blocks;
+        if (region == DocumentRegion::Header) blocks_ptr = &pages.back()->header_blocks;
+        else if (region == DocumentRegion::Footer) blocks_ptr = &pages.back()->footer_blocks;
+
+        if (!blocks_ptr->empty() &&
+            !blocks_ptr->back()->lines.empty() &&
+            !blocks_ptr->back()->lines.back()->runs.empty())
+        {
+            auto& last_run = blocks_ptr->back()->lines.back()->runs.back();
+            return last_run->logical_offset + last_run->logical_text.length();
+        }
     }
 
     return 0;

@@ -12,6 +12,7 @@
 #include <pluma/Typography/ITextShaper.hpp>
 
 #include <pluma/Style/FormatRegistry.hpp>
+#include <functional>
 
 namespace pluma {
 
@@ -45,18 +46,15 @@ public:
         PageMargins margins, 
         const FormatRegistry& registry,
         std::string_view header_text = "",
+        const FormatRegistry* header_registry = nullptr,
         std::string_view footer_text = "",
+        const FormatRegistry* footer_registry = nullptr,
+        const std::function<bool(int)>& has_header_cb = nullptr,
+        const std::function<bool(int)>& has_footer_cb = nullptr,
         uint32_t logical_offset_base = 0
     );
 
 private:
-    std::vector<std::unique_ptr<BlockBox>> layoutHeaderFooter(
-        std::string_view text,
-        int page_num,
-        int total_pages,
-        PageSize page_size,
-        PageMargins margins
-    );
     std::shared_ptr<ITextShaper> shaper_;
     std::shared_ptr<IFont> font_;
 };

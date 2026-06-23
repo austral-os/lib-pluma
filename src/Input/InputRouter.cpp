@@ -14,6 +14,7 @@ constexpr uint32_t KEYSYM_RIGHT = 0xff53;
 constexpr uint32_t KEYSYM_UP = 0xff52;
 constexpr uint32_t KEYSYM_DOWN = 0xff54;
 constexpr uint32_t KEYSYM_INSERT = 0xff63;
+constexpr uint32_t KEYSYM_ESCAPE = 0xff1b;
 
 InputRouter::InputRouter() {
     // Default standard shortcuts
@@ -39,6 +40,7 @@ InputRouter::InputRouter() {
     registerShortcut(KEYSYM_RIGHT, ModifierFlags::Control | ModifierFlags::Shift, EditorAction::MoveCursorRightWord);
 
     registerShortcut(KEYSYM_INSERT, ModifierFlags::None, EditorAction::ToggleInsertMode);
+    registerShortcut(KEYSYM_ESCAPE, ModifierFlags::None, EditorAction::Cancel);
 }
 
 void InputRouter::registerShortcut(uint32_t keysym, ModifierFlags mods, EditorAction action) {

@@ -24,8 +24,23 @@
 #include <pluma/Style/FormatRegistry.hpp>
 #include <optional>
 #include <functional>
+#include <map>
 
 namespace pluma {
+
+struct DocumentPart {
+    PieceTable document;
+    FormatRegistry format_registry;
+    UndoManager undo_manager;
+    SelectionRange selection{0, 0};
+    
+    DocumentPart() : undo_manager(document, format_registry) {}
+};
+
+struct PageStyle {
+    bool has_header = true;
+    bool has_footer = true;
+};
 
 enum class CursorObjectType {
     Text,
@@ -232,6 +247,28 @@ public:
     uint32_t getCurrentPageNumber() const;
 
     /**
+     * @brief Gets or sets the active document region.
+     */
+    DocumentRegion getActiveRegion() const { return active_region_; }
+    void setActiveRegion(DocumentRegion region);
+
+    /**
+     * @brief Gets the style for a specific page.
+     */
+    PageStyle getPageStyle(uint32_t page_number) const {
+        auto it = page_styles_.find(page_number);
+        if (it != page_styles_.end()) {
+            return it->second;
+        }
+        return PageStyle{};
+    }
+    
+    void setPageStyle(uint32_t page_number, const PageStyle& style) {
+        page_styles_[page_number] = style;
+        updateLayout();
+    }
+
+    /**
      * @brief Gets the total physical size of the document (all pages + gaps).
      * @return The Size structure in Twips.
      */
@@ -383,22 +420,22 @@ public:
     /**
      * @brief Exposes the text for test assertions.
      */
-    std::string getText() const { return document_.getText(); }
+    std::string getText() const { return active_doc_->document.getText(); }
     
     /**
      * @brief Returns the current cursor position.
      */
-    uint32_t getCursorOffset() const { return selection_.head; }
+    uint32_t getCursorOffset() const { return active_doc_->selection.head; }
 
     /**
      * @brief Returns the current selection range.
      */
-    SelectionRange getSelectionRange() const { return selection_; }
+    SelectionRange getSelectionRange() const { return active_doc_->selection; }
 
     /**
      * @brief Exposes the format registry for serialization.
      */
-    const FormatRegistry& getFormatRegistry() const { return format_registry_; }
+    const FormatRegistry& getFormatRegistry() const { return active_doc_->format_registry; }
 
     /**
      * @brief Toggles between Insert and Replace text input modes.
@@ -430,9 +467,13 @@ private:
     void onEditorAction(EditorAction action, const std::string& text, ModifierFlags mods);
     void deleteBackward();
 
-    PieceTable document_;
-    FormatRegistry format_registry_;
-    UndoManager undo_manager_;
+    DocumentPart main_doc_;
+    DocumentPart header_doc_;
+    DocumentPart footer_doc_;
+    DocumentPart* active_doc_{&main_doc_};
+    DocumentRegion active_region_{DocumentRegion::Body};
+    std::map<uint32_t, PageStyle> page_styles_;
+
     DOMManager dom_manager_;
     std::shared_ptr<ITextShaper> shaper_;
     std::shared_ptr<IFont> default_font_;
@@ -460,7 +501,6 @@ private:
     uint32_t caret_blink_interval_ms_{500};
     bool caret_blink_state_{true};
 
-    SelectionRange selection_{0, 0};
     std::vector<std::unique_ptr<PageBox>> current_pages_;
     
     DragMode drag_mode_{DragMode::None};

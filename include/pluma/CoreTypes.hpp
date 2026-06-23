@@ -8,6 +8,12 @@
 
 namespace pluma {
 
+enum class DocumentRegion {
+    Header,
+    Body,
+    Footer
+};
+
 /**
  * @class Twips
  * @brief Represents a measurement in twips (1/20 of a point, 1/1440 of an inch).

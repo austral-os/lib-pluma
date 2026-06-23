@@ -6,8 +6,7 @@
 namespace pluma {
 
 PlumaEditor::PlumaEditor(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font)
-    : undo_manager_(document_, format_registry_),
-      shaper_(std::move(shaper)),
+    : shaper_(std::move(shaper)),
       default_font_(std::move(default_font)),
       layout_engine_(shaper_, default_font_) {
     
@@ -16,6 +15,16 @@ PlumaEditor::PlumaEditor(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IF
         this->onEditorAction(action, text, mods);
     });
 
+    updateLayout();
+}
+
+void PlumaEditor::setActiveRegion(DocumentRegion region) {
+    active_region_ = region;
+    switch(region) {
+        case DocumentRegion::Header: active_doc_ = &header_doc_; break;
+        case DocumentRegion::Body: active_doc_ = &main_doc_; break;
+        case DocumentRegion::Footer: active_doc_ = &footer_doc_; break;
+    }
     updateLayout();
 }
 
@@ -46,7 +55,7 @@ void PlumaEditor::setWorkspaceBackgroundColor(Color color) {
 }
 
 std::optional<std::pair<uint32_t, uint32_t>> PlumaEditor::getProtectedTagBounds(uint32_t logical_offset) const {
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     if (text.empty() || logical_offset > text.length()) return std::nullopt;
 
     // Check inline FIELD tags
@@ -107,8 +116,8 @@ uint32_t PlumaEditor::snapNearest(uint32_t offset) const {
 }
 
 void PlumaEditor::setSelection(uint32_t anchor, uint32_t head) {
-    selection_.anchor = snapNearest(anchor);
-    selection_.head = snapNearest(head);
+    active_doc_->selection.anchor = snapNearest(anchor);
+    active_doc_->selection.head = snapNearest(head);
     table_selection_.mode = TableSelectionMode::None;
     selected_image_offset_ = std::nullopt;
     updateCursorState();
@@ -159,7 +168,7 @@ void PlumaEditor::setCaretBlink(bool blinks, uint32_t interval_ms) {
 }
 
 bool PlumaEditor::onBlinkTimer() {
-    if (!caret_blinks_ || !caret_visible_ || !selection_.isCollapsed()) {
+    if (!caret_blinks_ || !caret_visible_ || !active_doc_->selection.isCollapsed()) {
         return false;
     }
     caret_blink_state_ = !caret_blink_state_;
@@ -202,7 +211,7 @@ std::optional<uint32_t> PlumaEditor::getBlankPageOffsetAtY(Twips y) const {
 }
 
 void PlumaEditor::deleteBlankPage(uint32_t offset) {
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     if (offset < text.length() && text.length() - offset >= 11) {
         std::string tag = text.substr(offset, 11);
         if (tag == "|BLANKPAGE|") {
@@ -220,20 +229,20 @@ void PlumaEditor::deleteBlankPage(uint32_t offset) {
                 del_len++;
             }
 
-            undo_manager_.beginTransaction();
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(del_start, del_len));
-            format_registry_.deleteText(del_start, del_len);
-            undo_manager_.commitTransaction();
+            active_doc_->undo_manager.beginTransaction();
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(del_start, del_len));
+            active_doc_->format_registry.deleteText(del_start, del_len);
+            active_doc_->undo_manager.commitTransaction();
             
             // Adjust selection if it was past the deleted text
-            if (selection_.head > del_start) {
-                if (selection_.head >= del_start + del_len) {
-                    selection_.head -= del_len;
+            if (active_doc_->selection.head > del_start) {
+                if (active_doc_->selection.head >= del_start + del_len) {
+                    active_doc_->selection.head -= del_len;
                 } else {
-                    selection_.head = del_start;
+                    active_doc_->selection.head = del_start;
                 }
             }
-            selection_.anchor = selection_.head;
+            active_doc_->selection.anchor = active_doc_->selection.head;
             
             updateLayout();
             updateCursorState();
@@ -252,11 +261,11 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
                         std::get<TextDecoration>(value) == TextDecoration::SpellingError);
 
     if (!is_spelling) {
-        undo_manager_.beginTransaction();
+        active_doc_->undo_manager.beginTransaction();
     }
 
     if (table_selection_.mode != TableSelectionMode::None) {
-        std::string doc_text = document_.getText();
+        std::string doc_text = active_doc_->document.getText();
         uint32_t offset = table_selection_.table_offset;
         
         int current_row = -1;
@@ -327,7 +336,7 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
                 
                 if (is_selected) {
                     if (cell_end > cell_start) {
-                        format_registry_.applyStyle(cell_start, cell_end - cell_start, id, value);
+                        active_doc_->format_registry.applyStyle(cell_start, cell_end - cell_start, id, value);
                     }
                 }
                 
@@ -348,17 +357,17 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
             }
         }
     } else {
-        format_registry_.applyStyle(start, length, id, value);
+        active_doc_->format_registry.applyStyle(start, length, id, value);
     }
     
     if (!is_spelling) {
-        undo_manager_.commitTransaction();
+        active_doc_->undo_manager.commitTransaction();
         updateLayout();
     }
 }
 
 void PlumaEditor::clearDecorationGlobally(TextDecoration target_dec) {
-    format_registry_.clearDecorationGlobally(target_dec);
+    active_doc_->format_registry.clearDecorationGlobally(target_dec);
     // Decorations don't affect layout, no need to updateLayout()
 }
 
@@ -461,7 +470,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                 
                 if (img_rect.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
                     selected_image_offset_ = img->logical_offset;
-                    selection_.head = selection_.anchor = img->logical_offset;
+                    active_doc_->selection.head = active_doc_->selection.anchor = img->logical_offset;
                     drag_mode_ = DragMode::ImageMove;
                     drag_start_x_ = absolute_x;
                     drag_start_y_ = absolute_y;
@@ -561,12 +570,22 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
         active_table_offset_ = std::nullopt;
     }
 
-    auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_);
+    auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_, active_region_);
+    
+    // If we missed and we're not in the Body, try falling back to the Body to exit Header/Footer mode
+    if (!offset_opt.has_value() && active_region_ != DocumentRegion::Body) {
+        auto body_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_, DocumentRegion::Body);
+        if (body_opt.has_value()) {
+            setActiveRegion(DocumentRegion::Body);
+            offset_opt = body_opt;
+        }
+    }
+
     if (offset_opt.has_value()) {
-        selection_.head = *offset_opt;
+        active_doc_->selection.head = *offset_opt;
         
         if (!hasModifier(mods, ModifierFlags::Shift)) {
-            selection_.anchor = selection_.head;
+            active_doc_->selection.anchor = active_doc_->selection.head;
         }
         
         updateLayout();
@@ -581,10 +600,10 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
     if (button == MouseButton::Left) {
         if (drag_mode_ == DragMode::ImageMove && selected_image_offset_.has_value()) {
             uint32_t src_offset = *selected_image_offset_;
-            uint32_t dest_offset = selection_.head;
+            uint32_t dest_offset = active_doc_->selection.head;
 
             if (src_offset != dest_offset) {
-                std::string doc_text = document_.getText();
+                std::string doc_text = active_doc_->document.getText();
                 std::string tag_content = doc_text.substr(src_offset);
                 size_t end_idx = tag_content.find("|", 1);
                 if (end_idx != std::string::npos && end_idx > 6 && tag_content.substr(0, 7) == "|IMAGE:") {
@@ -602,11 +621,11 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                         actual_len++;
                     }
                     
-                    PropertyBag bag = format_registry_.getStyleAt(src_offset);
+                    PropertyBag bag = active_doc_->format_registry.getStyleAt(src_offset);
 
-                    undo_manager_.beginTransaction();
-                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(actual_src, actual_len));
-                    format_registry_.deleteText(actual_src, actual_len);
+                    active_doc_->undo_manager.beginTransaction();
+                    active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(actual_src, actual_len));
+                    active_doc_->format_registry.deleteText(actual_src, actual_len);
 
                     if (dest_offset > actual_src) {
                         if (dest_offset >= actual_src + actual_len) {
@@ -616,7 +635,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                         }
                     }
 
-                    std::string new_doc_text = document_.getText();
+                    std::string new_doc_text = active_doc_->document.getText();
                     uint32_t para_start = dest_offset;
                     while (para_start > 0 && new_doc_text[para_start - 1] != '\n') {
                         para_start--;
@@ -631,23 +650,23 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                     std::string to_insert = img_tag;
                     uint32_t tag_offset = dest_offset;
 
-                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(dest_offset, to_insert));
-                    format_registry_.insertText(dest_offset, to_insert.length());
+                    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(dest_offset, to_insert));
+                    active_doc_->format_registry.insertText(dest_offset, to_insert.length());
 
                     for (auto& [prop_id, prop_val] : bag.getAll()) {
-                        format_registry_.applyStyle(tag_offset, tag_len, prop_id, prop_val);
+                        active_doc_->format_registry.applyStyle(tag_offset, tag_len, prop_id, prop_val);
                     }
-                    format_registry_.applyStyle(tag_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+                    active_doc_->format_registry.applyStyle(tag_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
 
-                    undo_manager_.commitTransaction();
+                    active_doc_->undo_manager.commitTransaction();
 
                     selected_image_offset_ = tag_offset;
-                    selection_.anchor = selection_.head = tag_offset;
+                    active_doc_->selection.anchor = active_doc_->selection.head = tag_offset;
                     updateLayout();
                     updateCursorState();
                 }
             } else {
-                std::string doc_text = document_.getText();
+                std::string doc_text = active_doc_->document.getText();
                 std::string tag_content = doc_text.substr(src_offset);
                 size_t end_idx = tag_content.find("|", 1);
                 if (end_idx != std::string::npos && end_idx > 6 && tag_content.substr(0, 7) == "|IMAGE:") {
@@ -677,11 +696,11 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                     }
                     
                     Twips anchor_search_y = absolute_y_up;
-                    auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x_up, anchor_search_y, page_gap_);
+                    auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x_up, anchor_search_y, page_gap_, active_region_);
                     if (drop_offset_opt.has_value()) {
                         uint32_t new_offset = *drop_offset_opt;
                         
-                        std::string full_text = document_.getText();
+                        std::string full_text = active_doc_->document.getText();
                         while (new_offset > 0 && full_text[new_offset - 1] != '\n') {
                             new_offset--;
                         }
@@ -691,24 +710,24 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                             new_offset = src_offset; // stay in place
                         }
                         
-                        undo_manager_.beginTransaction();
+                        active_doc_->undo_manager.beginTransaction();
                         
                         // Extract properties before deleting
-                        PropertyBag img_props = format_registry_.getStyleAt(src_offset);
+                        PropertyBag img_props = active_doc_->format_registry.getStyleAt(src_offset);
                         std::string img_tag = tag_content.substr(0, tag_len);
                         
                         if (new_offset != src_offset) {
-                            document_.remove(src_offset, tag_len);
-                            format_registry_.deleteText(src_offset, tag_len);
+                            active_doc_->document.remove(src_offset, tag_len);
+                            active_doc_->format_registry.deleteText(src_offset, tag_len);
                             
                             if (new_offset > src_offset) {
                                 new_offset -= tag_len;
                             }
                             
-                            document_.insert(new_offset, img_tag);
-                            format_registry_.insertText(new_offset, tag_len);
+                            active_doc_->document.insert(new_offset, img_tag);
+                            active_doc_->format_registry.insertText(new_offset, tag_len);
                             for (const auto& kv : img_props.getAll()) {
-                                format_registry_.applyStyle(new_offset, tag_len, kv.first, kv.second);
+                                active_doc_->format_registry.applyStyle(new_offset, tag_len, kv.first, kv.second);
                             }
                         }
                         
@@ -737,12 +756,12 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                         float new_image_x_pt = (drag_initial_w_ + dx).getValue() / 15.0f;
                         float new_image_y_pt = new_img_y_relative.getValue() / 15.0f;
                         
-                        format_registry_.applyStyle(new_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
-                        format_registry_.applyStyle(new_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                        active_doc_->format_registry.applyStyle(new_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+                        active_doc_->format_registry.applyStyle(new_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
                         
-                        undo_manager_.commitTransaction();
+                        active_doc_->undo_manager.commitTransaction();
                         updateLayout();
-                        selection_.head = selection_.anchor = new_offset;
+                        active_doc_->selection.head = active_doc_->selection.anchor = new_offset;
                     }
                 }
             }
@@ -784,8 +803,8 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
         float h_pt = new_h.getValue() / 15.0f;
         
         // Apply directly to format registry for live feedback
-        format_registry_.applyStyle(*selected_image_offset_, 1, PropertyId::ImageWidth, w_pt);
-        format_registry_.applyStyle(*selected_image_offset_, 1, PropertyId::ImageHeight, h_pt);
+        active_doc_->format_registry.applyStyle(*selected_image_offset_, 1, PropertyId::ImageWidth, w_pt);
+        active_doc_->format_registry.applyStyle(*selected_image_offset_, 1, PropertyId::ImageHeight, h_pt);
         
         updateLayout();
         return true;
@@ -877,7 +896,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                         if (i > 0) new_widths += ",";
                         new_widths += std::to_string(widths[i] / 15.0f);
                     }
-                    format_registry_.applyStyle(*active_table_offset_, 5, PropertyId::TableColumnWidths, new_widths);
+                    active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableColumnWidths, new_widths);
                 }
             }
         }
@@ -921,7 +940,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                 new_heights += std::to_string(h_pt);
                 i++;
             }
-            format_registry_.applyStyle(*active_table_offset_, 5, PropertyId::TableRowHeights, new_heights);
+            active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableRowHeights, new_heights);
         }
 
         updateLayout();
@@ -930,12 +949,12 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
 
     if (drag_mode_ == DragMode::ImageMove && selected_image_offset_.has_value()) {
         uint32_t src_offset = *selected_image_offset_;
-        std::string doc_text = document_.getText();
+        std::string doc_text = active_doc_->document.getText();
         std::string tag_content = doc_text.substr(src_offset);
         size_t end_idx = tag_content.find("|", 1);
         if (end_idx != std::string::npos && end_idx > 6 && tag_content.substr(0, 7) == "|IMAGE:") {
             uint32_t tag_len = end_idx + 1;
-            PropertyBag bag = format_registry_.getStyleAt(src_offset);
+            PropertyBag bag = active_doc_->format_registry.getStyleAt(src_offset);
             if (auto wrap_val = bag.get(PropertyId::ImageWrapMode)) {
                 auto mode = std::get<TextWrapMode>(*wrap_val);
                 if (mode == TextWrapMode::Square || mode == TextWrapMode::Tight || mode == TextWrapMode::Through) {
@@ -956,8 +975,8 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                     Twips new_img_y = drag_initial_h_ + dy;
                     float new_image_x_pt = new_img_x.getValue() / 15.0f;
                     float new_image_y_pt = new_img_y.getValue() / 15.0f;
-                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
-                    format_registry_.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                    active_doc_->format_registry.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
+                    active_doc_->format_registry.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
                     updateLayout();
                     return true;
                 }
@@ -967,17 +986,17 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             // Resolve the logical offset at the current mouse position.
             // For Option A, the user expects the caret to follow their mouse pointer
             Twips anchor_search_y = absolute_y;
-            auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, anchor_search_y, page_gap_);
+            auto drop_offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, anchor_search_y, page_gap_, active_region_);
             if (drop_offset_opt.has_value()) {
                 uint32_t new_offset = *drop_offset_opt;
-                std::string full_text = document_.getText();
+                std::string full_text = active_doc_->document.getText();
                 while (new_offset > 0 && full_text[new_offset - 1] != '\n') {
                     new_offset--;
                 }
                 
-                if (selection_.head != new_offset) {
-                    selection_.head = new_offset;
-                    selection_.anchor = new_offset;
+                if (active_doc_->selection.head != new_offset) {
+                    active_doc_->selection.head = new_offset;
+                    active_doc_->selection.anchor = new_offset;
                     caret_blink_state_ = true; // Force caret visible while dragging
                     updateLayout();
                 }
@@ -1008,10 +1027,10 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             }
         }
 
-        auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_);
+        auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_, active_region_);
         if (offset_opt.has_value()) {
-            if (selection_.head != *offset_opt) {
-                selection_.head = *offset_opt;
+            if (active_doc_->selection.head != *offset_opt) {
+                active_doc_->selection.head = *offset_opt;
                 updateLayout();
             }
             return true;
@@ -1046,10 +1065,38 @@ bool PlumaEditor::onMouseDoubleClick(double x, double y, MouseButton button, Mod
     Twips absolute_x = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
     Twips absolute_y = Twips(static_cast<int32_t>(y * 15.0)) + viewport_y_;
 
-    auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_);
+    Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
+    absolute_x = absolute_x - page_x;
+
+    if (!current_pages_.empty()) {
+        Twips page_total = current_pages_[0]->getBounds().height + page_gap_;
+        Twips y_in_page(absolute_y.getValue() % page_total.getValue());
+        
+        Twips m_top = page_margins_.top;
+        for (const auto& b : current_pages_[0]->header_blocks) m_top = m_top + b->getBounds().height;
+        if (!current_pages_[0]->header_blocks.empty()) m_top = m_top + Twips(240);
+
+        Twips m_bottom = page_margins_.bottom;
+        for (const auto& b : current_pages_[0]->footer_blocks) m_bottom = m_bottom + b->getBounds().height;
+        if (!current_pages_[0]->footer_blocks.empty()) m_bottom = m_bottom + Twips(240);
+
+        DocumentRegion new_region = DocumentRegion::Body;
+        if (y_in_page.getValue() < m_top.getValue()) {
+            new_region = DocumentRegion::Header;
+        } else if (y_in_page.getValue() > current_pages_[0]->getBounds().height.getValue() - m_bottom.getValue()) {
+            new_region = DocumentRegion::Footer;
+        }
+
+        if (new_region != active_region_) {
+            setActiveRegion(new_region);
+            return true;
+        }
+    }
+
+    auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_, active_region_);
     if (offset_opt.has_value()) {
         uint32_t offset = *offset_opt;
-        std::string text = document_.getText();
+        std::string text = active_doc_->document.getText();
         
         if (text.empty()) return true;
 
@@ -1065,8 +1112,8 @@ bool PlumaEditor::onMouseDoubleClick(double x, double y, MouseButton button, Mod
             end++;
         }
 
-        selection_.anchor = start;
-        selection_.head = end;
+        active_doc_->selection.anchor = start;
+        active_doc_->selection.head = end;
         
         updateLayout();
         updateCursorState();
@@ -1125,76 +1172,76 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             }
             break;
         case EditorAction::Undo:
-            undo_manager_.undo();
+            active_doc_->undo_manager.undo();
             // Very naive cursor restoration for now
-            selection_.head = selection_.anchor = document_.getLength();
+            active_doc_->selection.head = active_doc_->selection.anchor = active_doc_->document.getLength();
             updateLayout();
             updateCursorState();
             break;
         case EditorAction::Redo:
-            undo_manager_.redo();
-            selection_.head = selection_.anchor = document_.getLength();
+            active_doc_->undo_manager.redo();
+            active_doc_->selection.head = active_doc_->selection.anchor = active_doc_->document.getLength();
             updateLayout();
             updateCursorState();
             break;
         case EditorAction::MoveCursorLeft:
-            if (selection_.head > 0) {
-                selection_.head--;
+            if (active_doc_->selection.head > 0) {
+                active_doc_->selection.head--;
                 // Skip non-renderable positions (table tag characters like |ROW|, |CEL|…)
                 // A position is non-renderable when it has no run box in the layout.
-                while (selection_.head > 0 &&
-                       !CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
-                    selection_.head--;
+                while (active_doc_->selection.head > 0 &&
+                       !CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
+                    active_doc_->selection.head--;
                 }
-                selection_.head = snapLeft(selection_.head);
-                if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                active_doc_->selection.head = snapLeft(active_doc_->selection.head);
+                if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                 updateCursorState();
             }
             break;
         case EditorAction::MoveCursorRight:
-            if (selection_.head < document_.getLength()) {
-                selection_.head++;
+            if (active_doc_->selection.head < active_doc_->document.getLength()) {
+                active_doc_->selection.head++;
                 // Skip non-renderable positions (table tag characters)
-                while (selection_.head < document_.getLength() &&
-                       !CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
-                    selection_.head++;
+                while (active_doc_->selection.head < active_doc_->document.getLength() &&
+                       !CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
+                    active_doc_->selection.head++;
                 }
-                selection_.head = snapRight(selection_.head);
-                if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                active_doc_->selection.head = snapRight(active_doc_->selection.head);
+                if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                 updateCursorState();
             }
             break;
         case EditorAction::MoveCursorLeftWord:
-            if (selection_.head > 0) {
-                std::string content = document_.getText();
-                uint32_t pos = selection_.head;
+            if (active_doc_->selection.head > 0) {
+                std::string content = active_doc_->document.getText();
+                uint32_t pos = active_doc_->selection.head;
                 while (pos > 0 && std::isspace(content[pos - 1])) pos--;
                 while (pos > 0 && !std::isspace(content[pos - 1])) pos--;
-                selection_.head = snapLeft(pos);
-                if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                active_doc_->selection.head = snapLeft(pos);
+                if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                 updateCursorState();
             }
             break;
         case EditorAction::MoveCursorRightWord:
-            if (selection_.head < document_.getLength()) {
-                std::string content = document_.getText();
-                uint32_t pos = selection_.head;
-                uint32_t len = document_.getLength();
+            if (active_doc_->selection.head < active_doc_->document.getLength()) {
+                std::string content = active_doc_->document.getText();
+                uint32_t pos = active_doc_->selection.head;
+                uint32_t len = active_doc_->document.getLength();
                 while (pos < len && !std::isspace(content[pos])) pos++;
                 while (pos < len && std::isspace(content[pos])) pos++;
-                selection_.head = snapRight(pos);
-                if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                active_doc_->selection.head = snapRight(pos);
+                if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                 updateCursorState();
             }
             break;
         case EditorAction::MoveCursorUp: {
-            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
+            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
                 Twips half_line(90);
                 Twips target_y = Twips(std::max(0, rect->y.getValue() - half_line.getValue()));
-                if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_)) {
-                    if (*new_offset != selection_.head) {
-                        selection_.head = snapNearest(*new_offset);
-                        if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
+                    if (*new_offset != active_doc_->selection.head) {
+                        active_doc_->selection.head = snapNearest(*new_offset);
+                        if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                         updateCursorState();
                         break;
                     }
@@ -1225,9 +1272,9 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                     }
                     if (last_skipped_table) {
                         uint32_t tpos = findLastTableContent(*last_skipped_table);
-                        if (tpos > 0 && tpos != selection_.head) {
-                            selection_.head = tpos;
-                            if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                        if (tpos > 0 && tpos != active_doc_->selection.head) {
+                            active_doc_->selection.head = tpos;
+                            if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                             updateCursorState();
                             found = true;
                         }
@@ -1239,13 +1286,13 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             break;
         }
         case EditorAction::MoveCursorDown: {
-            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
+            if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_)) {
                 // Land in the middle of the line below
                 Twips target_y = rect->y + rect->height + Twips(rect->height.getValue() / 2);
-                if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_)) {
-                    if (*new_offset != selection_.head) {
-                        selection_.head = snapNearest(*new_offset);
-                        if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
+                if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_, active_region_)) {
+                    if (*new_offset != active_doc_->selection.head) {
+                        active_doc_->selection.head = snapNearest(*new_offset);
+                        if (!hasModifier(mods, ModifierFlags::Shift)) active_doc_->selection.anchor = active_doc_->selection.head;
                         updateCursorState();
                     }
                 }
@@ -1257,6 +1304,14 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             break;
         case EditorAction::ToggleInsertMode:
             toggleInsertMode();
+            break;
+        case EditorAction::Cancel:
+            if (active_region_ != DocumentRegion::Body) {
+                active_region_ = DocumentRegion::Body;
+                active_doc_ = &main_doc_;
+                updateLayout();
+                updateCursorState();
+            }
             break;
         default:
             break;
@@ -1302,21 +1357,21 @@ static uint32_t skipTableMarker(const std::string& doc_text, uint32_t pos) {
 }
 
 void PlumaEditor::insertTextAtCursor(const std::string& text) {
-    if (!selection_.isCollapsed()) {
+    if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
     } else if (insert_mode_ == InsertMode::Replace) {
-        uint32_t current_len = document_.getLength();
-        if (selection_.head < current_len) {
-            std::string existing = document_.getText().substr(selection_.head, 1);
+        uint32_t current_len = active_doc_->document.getLength();
+        if (active_doc_->selection.head < current_len) {
+            std::string existing = active_doc_->document.getText().substr(active_doc_->selection.head, 1);
             if (existing != "\n") {
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(selection_.head, text.length()));
-                format_registry_.deleteText(selection_.head, text.length());
-                undo_manager_.addCommand(std::make_unique<InsertTextCommand>(selection_.head, text));
-                format_registry_.insertText(selection_.head, text.length());
-                undo_manager_.commitTransaction();
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(active_doc_->selection.head, text.length()));
+                active_doc_->format_registry.deleteText(active_doc_->selection.head, text.length());
+                active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(active_doc_->selection.head, text));
+                active_doc_->format_registry.insertText(active_doc_->selection.head, text.length());
+                active_doc_->undo_manager.commitTransaction();
                 
-                selection_.head = selection_.anchor = selection_.head + text.length();
+                active_doc_->selection.head = active_doc_->selection.anchor = active_doc_->selection.head + text.length();
                 updateLayout();
                 updateCursorState();
                 return;
@@ -1325,8 +1380,8 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
     }
 
     std::string text_to_insert = text;
-    uint32_t start = selection_.getStart();
-    std::string doc_text = document_.getText();
+    uint32_t start = active_doc_->selection.getStart();
+    std::string doc_text = active_doc_->document.getText();
     bool cursor_at_tbl_start = false;
     
     if (text != "\n") {
@@ -1348,13 +1403,13 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
             } else if (isPageMarker(current_para)) {
                 start = next_nl + 1;
                 if (start >= doc_text.length()) {
-                    selection_.head = selection_.anchor = start;
+                    active_doc_->selection.head = active_doc_->selection.anchor = start;
                     return;
                 }
             } else {
                 start = skipTableMarker(doc_text, start);
                 if (start >= doc_text.length()) {
-                    selection_.head = selection_.anchor = start;
+                    active_doc_->selection.head = active_doc_->selection.anchor = start;
                     return;
                 }
             }
@@ -1387,12 +1442,12 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
         
         if (!copied_tags.empty()) {
             if (para_text == copied_tags) {
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(para_start, copied_tags.length()));
-                format_registry_.deleteText(para_start, copied_tags.length());
-                undo_manager_.commitTransaction();
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(para_start, copied_tags.length()));
+                active_doc_->format_registry.deleteText(para_start, copied_tags.length());
+                active_doc_->undo_manager.commitTransaction();
                 
-                selection_.head = selection_.anchor = para_start;
+                active_doc_->selection.head = active_doc_->selection.anchor = para_start;
                 updateLayout();
                 updateCursorState();
                 return;
@@ -1402,47 +1457,47 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
         }
     }
 
-    undo_manager_.beginTransaction();
-    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(start, text_to_insert));
-    format_registry_.insertText(start, text_to_insert.length());
-    undo_manager_.commitTransaction();
+    active_doc_->undo_manager.beginTransaction();
+    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(start, text_to_insert));
+    active_doc_->format_registry.insertText(start, text_to_insert.length());
+    active_doc_->undo_manager.commitTransaction();
     
     if (cursor_at_tbl_start) {
-        selection_.head = selection_.anchor = start + text_to_insert.length() - 1;
+        active_doc_->selection.head = active_doc_->selection.anchor = start + text_to_insert.length() - 1;
     } else {
-        selection_.head = selection_.anchor = start + text_to_insert.length();
+        active_doc_->selection.head = active_doc_->selection.anchor = start + text_to_insert.length();
     }
     updateLayout();
     updateCursorState();
 }
 
 void PlumaEditor::deleteBackward() {
-    if (!selection_.isCollapsed()) {
+    if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
-    } else if (selection_.head > 0) {
-        auto bounds = getProtectedTagBounds(selection_.head - 1);
+    } else if (active_doc_->selection.head > 0) {
+        auto bounds = getProtectedTagBounds(active_doc_->selection.head - 1);
         if (bounds) {
             uint32_t tag_start = bounds->first;
             uint32_t tag_len = bounds->second;
-            std::string doc_text = document_.getText();
+            std::string doc_text = active_doc_->document.getText();
             if (doc_text.substr(tag_start, 7) == "|FIELD:") {
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(tag_start, tag_len));
-                format_registry_.deleteText(tag_start, tag_len);
-                undo_manager_.commitTransaction();
-                selection_.head = selection_.anchor = tag_start;
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(tag_start, tag_len));
+                active_doc_->format_registry.deleteText(tag_start, tag_len);
+                active_doc_->undo_manager.commitTransaction();
+                active_doc_->selection.head = active_doc_->selection.anchor = tag_start;
                 updateLayout();
                 updateCursorState();
                 return;
             }
         }
         
-        uint32_t para_start = selection_.head;
-        std::string doc_text = document_.getText();
+        uint32_t para_start = active_doc_->selection.head;
+        std::string doc_text = active_doc_->document.getText();
         while (para_start > 0 && doc_text[para_start - 1] != '\n') {
             para_start--;
         }
-        std::string para_text = doc_text.substr(para_start, selection_.head - para_start);
+        std::string para_text = doc_text.substr(para_start, active_doc_->selection.head - para_start);
         
         size_t search_start = 0;
         if (para_text.length() >= 8 && para_text.substr(0, 8) == "|INDENT:") {
@@ -1474,51 +1529,51 @@ void PlumaEditor::deleteBackward() {
             total_tags_length = para_text.length();
         }
 
-        if (total_tags_length > 0 && selection_.head > para_start && selection_.head <= para_start + total_tags_length) {
-            undo_manager_.beginTransaction();
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(para_start, total_tags_length));
-            format_registry_.deleteText(para_start, total_tags_length);
-            undo_manager_.commitTransaction();
-            selection_.head = selection_.anchor = para_start;
+        if (total_tags_length > 0 && active_doc_->selection.head > para_start && active_doc_->selection.head <= para_start + total_tags_length) {
+            active_doc_->undo_manager.beginTransaction();
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(para_start, total_tags_length));
+            active_doc_->format_registry.deleteText(para_start, total_tags_length);
+            active_doc_->undo_manager.commitTransaction();
+            active_doc_->selection.head = active_doc_->selection.anchor = para_start;
             updateLayout();
             updateCursorState();
             return;
         }
         
-        if (selection_.head == para_start && para_text.length() >= 7 && para_text.substr(0, 7) == "|IMAGE:") {
+        if (active_doc_->selection.head == para_start && para_text.length() >= 7 && para_text.substr(0, 7) == "|IMAGE:") {
             size_t end_img = para_text.find("|", 7);
             if (end_img != std::string::npos) {
                 size_t len = end_img + 1;
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(para_start, len));
-                format_registry_.deleteText(para_start, len);
-                undo_manager_.commitTransaction();
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(para_start, len));
+                active_doc_->format_registry.deleteText(para_start, len);
+                active_doc_->undo_manager.commitTransaction();
                 updateLayout();
                 updateCursorState();
                 return;
             }
         }
         
-        if (selection_.head == para_start && (isTableMarker(para_text) || isPageMarker(para_text))) {
+        if (active_doc_->selection.head == para_start && (isTableMarker(para_text) || isPageMarker(para_text))) {
             uint32_t marker_end = isTableMarker(para_text) ? skipTableMarker(doc_text, para_start) : para_start + para_text.length() + 1;
             if (marker_end > doc_text.length()) marker_end = doc_text.length();
             uint32_t del_len = marker_end - para_start;
-            undo_manager_.beginTransaction();
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(para_start, del_len));
-            format_registry_.deleteText(para_start, del_len);
-            undo_manager_.commitTransaction();
-            selection_.head = selection_.anchor = para_start;
+            active_doc_->undo_manager.beginTransaction();
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(para_start, del_len));
+            active_doc_->format_registry.deleteText(para_start, del_len);
+            active_doc_->undo_manager.commitTransaction();
+            active_doc_->selection.head = active_doc_->selection.anchor = para_start;
             updateLayout();
             updateCursorState();
             return;
         }
 
-        uint32_t start = selection_.head - 1;
-        std::string doc_text_utf8 = document_.getText();
+        uint32_t start = active_doc_->selection.head - 1;
+        std::string doc_text_utf8 = active_doc_->document.getText();
         while (start > 0 && (doc_text_utf8[start] & 0xC0) == 0x80) {
             start--;
         }
-        uint32_t end = selection_.head;
+        uint32_t end = active_doc_->selection.head;
         while (end < doc_text_utf8.length() && (doc_text_utf8[end] & 0xC0) == 0x80) {
             end++;
         }
@@ -1531,10 +1586,10 @@ void PlumaEditor::deleteBackward() {
                 size_t end_img = doc_text.find("|", next_para_start + 7);
                 if (end_img != std::string::npos) {
                     size_t len = end_img - next_para_start + 1;
-                    undo_manager_.beginTransaction();
-                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(next_para_start, len));
-                    format_registry_.deleteText(next_para_start, len);
-                    undo_manager_.commitTransaction();
+                    active_doc_->undo_manager.beginTransaction();
+                    active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(next_para_start, len));
+                    active_doc_->format_registry.deleteText(next_para_start, len);
+                    active_doc_->undo_manager.commitTransaction();
                     updateLayout();
                     updateCursorState();
                     return;
@@ -1552,33 +1607,33 @@ void PlumaEditor::deleteBackward() {
             }
         }
 
-        undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, delete_len));
-        format_registry_.deleteText(start, delete_len);
-        undo_manager_.commitTransaction();
-        selection_.head = selection_.anchor = start;
+        active_doc_->undo_manager.beginTransaction();
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(start, delete_len));
+        active_doc_->format_registry.deleteText(start, delete_len);
+        active_doc_->undo_manager.commitTransaction();
+        active_doc_->selection.head = active_doc_->selection.anchor = start;
         updateLayout();
         updateCursorState();
     }
 }
 
 void PlumaEditor::deleteForward() {
-    if (!selection_.isCollapsed()) {
+    if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
-    } else if (selection_.head < document_.getLength()) {
-        uint32_t start = selection_.head;
-        std::string doc_text = document_.getText();
+    } else if (active_doc_->selection.head < active_doc_->document.getLength()) {
+        uint32_t start = active_doc_->selection.head;
+        std::string doc_text = active_doc_->document.getText();
         
         auto bounds = getProtectedTagBounds(start);
         if (bounds) {
             uint32_t tag_start = bounds->first;
             uint32_t tag_len = bounds->second;
             if (doc_text.substr(tag_start, 7) == "|FIELD:") {
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(tag_start, tag_len));
-                format_registry_.deleteText(tag_start, tag_len);
-                undo_manager_.commitTransaction();
-                selection_.head = selection_.anchor = tag_start;
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(tag_start, tag_len));
+                active_doc_->format_registry.deleteText(tag_start, tag_len);
+                active_doc_->undo_manager.commitTransaction();
+                active_doc_->selection.head = active_doc_->selection.anchor = tag_start;
                 updateLayout();
                 updateCursorState();
                 return;
@@ -1589,10 +1644,10 @@ void PlumaEditor::deleteForward() {
             size_t end_img = doc_text.find("|", start + 7);
             if (end_img != std::string::npos) {
                 size_t len = end_img - start + 1;
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, len));
-                format_registry_.deleteText(start, len);
-                undo_manager_.commitTransaction();
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(start, len));
+                active_doc_->format_registry.deleteText(start, len);
+                active_doc_->undo_manager.commitTransaction();
                 updateLayout();
                 updateCursorState();
                 return;
@@ -1609,10 +1664,10 @@ void PlumaEditor::deleteForward() {
                 uint32_t marker_end = isTableMarker(para) ? skipTableMarker(doc_text, start) : start + para.length() + 1;
                 if (marker_end > doc_text.length()) marker_end = doc_text.length();
                 uint32_t del_len = marker_end - start;
-                undo_manager_.beginTransaction();
-                undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, del_len));
-                format_registry_.deleteText(start, del_len);
-                undo_manager_.commitTransaction();
+                active_doc_->undo_manager.beginTransaction();
+                active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(start, del_len));
+                active_doc_->format_registry.deleteText(start, del_len);
+                active_doc_->undo_manager.commitTransaction();
                 updateLayout();
                 updateCursorState();
                 return;
@@ -1622,15 +1677,15 @@ void PlumaEditor::deleteForward() {
         while (start > 0 && (doc_text[start] & 0xC0) == 0x80) {
             start--;
         }
-        uint32_t end = selection_.head + 1;
+        uint32_t end = active_doc_->selection.head + 1;
         while (end < doc_text.length() && (doc_text[end] & 0xC0) == 0x80) {
             end++;
         }
         uint32_t delete_len = end - start;
-        undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, delete_len));
-        format_registry_.deleteText(start, delete_len);
-        undo_manager_.commitTransaction();
+        active_doc_->undo_manager.beginTransaction();
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(start, delete_len));
+        active_doc_->format_registry.deleteText(start, delete_len);
+        active_doc_->undo_manager.commitTransaction();
         updateLayout();
         updateCursorState();
     }
@@ -1640,7 +1695,7 @@ void PlumaEditor::deleteSelectedImage() {
     if (!selected_image_offset_.has_value()) return;
     
     uint32_t offset = *selected_image_offset_;
-    std::string text_str = document_.getText();
+    std::string text_str = active_doc_->document.getText();
     
     if (offset < text_str.length() && text_str.substr(offset, 7) == "|IMAGE:") {
         size_t end_pos = text_str.find('|', offset + 7);
@@ -1652,12 +1707,12 @@ void PlumaEditor::deleteSelectedImage() {
                 len++;
             }
             
-            undo_manager_.beginTransaction();
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(offset, len));
-            format_registry_.deleteText(offset, len);
-            undo_manager_.commitTransaction();
+            active_doc_->undo_manager.beginTransaction();
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(offset, len));
+            active_doc_->format_registry.deleteText(offset, len);
+            active_doc_->undo_manager.commitTransaction();
             
-            selection_.head = selection_.anchor = offset;
+            active_doc_->selection.head = active_doc_->selection.anchor = offset;
             selected_image_offset_ = std::nullopt;
             drag_mode_ = DragMode::None;
             updateLayout();
@@ -1675,7 +1730,21 @@ void PlumaEditor::updateLayout() {
 
     // In a full implementation, we'd sync the DOM and use InvalidationTracker.
     // For the facade glue, a full rebuild ensures consistency.
-    current_pages_ = layout_engine_.layoutText(document_.getText(), page_size_, page_margins_, format_registry_, header_text_, footer_text_);
+    auto has_header = [this](int page_num) { return getPageStyle(page_num).has_header; };
+    auto has_footer = [this](int page_num) { return getPageStyle(page_num).has_footer; };
+    
+    current_pages_ = layout_engine_.layoutText(
+        main_doc_.document.getText(), 
+        page_size_, 
+        page_margins_, 
+        main_doc_.format_registry, 
+        header_doc_.document.getText(), 
+        &header_doc_.format_registry,
+        footer_doc_.document.getText(),
+        &footer_doc_.format_registry,
+        has_header,
+        has_footer
+    );
     updateCursorState();
 }
 
@@ -1692,18 +1761,18 @@ void PlumaEditor::resumeLayout() {
 
 
 std::string PlumaEditor::getSelectedText() const {
-    if (selection_.isCollapsed()) return "";
-    return document_.getText().substr(selection_.getStart(), selection_.getLength());
+    if (active_doc_->selection.isCollapsed()) return "";
+    return active_doc_->document.getText().substr(active_doc_->selection.getStart(), active_doc_->selection.getLength());
 }
 
 void PlumaEditor::deleteSelection() {
-    if (!selection_.isCollapsed()) {
-        uint32_t start = selection_.getStart();
-        undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(start, selection_.getLength()));
-        format_registry_.deleteText(start, selection_.getLength());
-        undo_manager_.commitTransaction();
-        selection_.head = selection_.anchor = start;
+    if (!active_doc_->selection.isCollapsed()) {
+        uint32_t start = active_doc_->selection.getStart();
+        active_doc_->undo_manager.beginTransaction();
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(start, active_doc_->selection.getLength()));
+        active_doc_->format_registry.deleteText(start, active_doc_->selection.getLength());
+        active_doc_->undo_manager.commitTransaction();
+        active_doc_->selection.head = active_doc_->selection.anchor = start;
         updateLayout();
     }
 }
@@ -1734,41 +1803,41 @@ void PlumaEditor::pasteText(const std::string& text) {
     
     if (sanitized.empty()) return;
     
-    undo_manager_.beginTransaction();
-    uint32_t insert_pos = selection_.head;
+    active_doc_->undo_manager.beginTransaction();
+    uint32_t insert_pos = active_doc_->selection.head;
     
-    if (!selection_.isCollapsed()) {
-        insert_pos = selection_.getStart();
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(insert_pos, selection_.getLength()));
-        format_registry_.deleteText(insert_pos, selection_.getLength());
+    if (!active_doc_->selection.isCollapsed()) {
+        insert_pos = active_doc_->selection.getStart();
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(insert_pos, active_doc_->selection.getLength()));
+        active_doc_->format_registry.deleteText(insert_pos, active_doc_->selection.getLength());
     }
     
-    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_pos, sanitized));
-    format_registry_.insertText(insert_pos, sanitized.length());
-    undo_manager_.commitTransaction();
+    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(insert_pos, sanitized));
+    active_doc_->format_registry.insertText(insert_pos, sanitized.length());
+    active_doc_->undo_manager.commitTransaction();
     
-    selection_.head = selection_.anchor = insert_pos + sanitized.length();
+    active_doc_->selection.head = active_doc_->selection.anchor = insert_pos + sanitized.length();
     updateLayout();
 }
 
 void PlumaEditor::loadText(const std::string& text) {
-    undo_manager_.beginTransaction();
-    if (document_.getLength() > 0) {
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(0, document_.getLength()));
-        format_registry_.clear();
+    active_doc_->undo_manager.beginTransaction();
+    if (active_doc_->document.getLength() > 0) {
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(0, active_doc_->document.getLength()));
+        active_doc_->format_registry.clear();
     }
     if (!text.empty()) {
-        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(0, text));
+        active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(0, text));
         // text is clean, no styles to insert since we just cleared
     }
-    undo_manager_.commitTransaction();
+    active_doc_->undo_manager.commitTransaction();
 
-    selection_ = {static_cast<uint32_t>(text.length()), static_cast<uint32_t>(text.length())};
+    active_doc_->selection = {static_cast<uint32_t>(text.length()), static_cast<uint32_t>(text.length())};
     updateLayout();
 }
 
 std::shared_ptr<DocumentSnapshot> PlumaEditor::getSnapshot() {
-    return document_.createSnapshot();
+    return active_doc_->document.createSnapshot();
 }
 
 void PlumaEditor::setScroll(Twips x, Twips y) {
@@ -1875,11 +1944,11 @@ void PlumaEditor::render(IRenderer& renderer) {
                             if (auto fi = run->style.get(PropertyId::FontStyleItalic)) desc.italic = std::get<bool>(*fi);
                             auto run_font = std::make_shared<DummyFont>(desc);
 
-                            if (!selection_.isCollapsed() && run->logical_offset != UINT32_MAX) {
+                            if (!active_doc_->selection.isCollapsed() && run->logical_offset != UINT32_MAX) {
                                 uint32_t run_start  = run->logical_offset;
                                 uint32_t run_end    = run_start + (uint32_t)run->logical_text.length();
-                                uint32_t sel_start  = selection_.getStart();
-                                uint32_t sel_end    = selection_.getEnd();
+                                uint32_t sel_start  = active_doc_->selection.getStart();
+                                uint32_t sel_end    = active_doc_->selection.getEnd();
                                 uint32_t ovl_start  = std::max(run_start, sel_start);
                                 uint32_t ovl_end    = std::min(run_end,   sel_end);
                                 if (ovl_start < ovl_end) {
@@ -1976,34 +2045,89 @@ void PlumaEditor::render(IRenderer& renderer) {
 
         if (show_margins_) {
             Twips m_left = page_margins_.left;
-            Twips m_top = page_margins_.top;
             Twips m_right = page_margins_.right;
+            
+            Twips m_top = page_margins_.top;
+            Twips header_h_only(0);
+            for (const auto& b : page->header_blocks) {
+                header_h_only = header_h_only + b->getBounds().height;
+            }
+            if (!page->header_blocks.empty()) {
+                m_top = m_top + header_h_only + Twips(240);
+            }
+            
             Twips m_bottom = page_margins_.bottom;
+            Twips footer_h_only(0);
+            for (const auto& b : page->footer_blocks) {
+                footer_h_only = footer_h_only + b->getBounds().height;
+            }
+            if (!page->footer_blocks.empty()) {
+                m_bottom = m_bottom + footer_h_only + Twips(240);
+            }
 
             Twips w = page->getBounds().width;
             Twips h = page->getBounds().height;
             Twips t = Twips(15); // 1 pixel stroke approx
 
-            // Top margin line
+            // Top margin line (Body)
             display_list.addCommand(std::make_unique<FillRectCommand>(
                 Rect{page_rect.x + m_left - viewport_x_, current_page_y + m_top - viewport_y_, w - m_left - m_right, t},
                 margin_color_
             ));
-            // Bottom margin line
+            // Bottom margin line (Body)
             display_list.addCommand(std::make_unique<FillRectCommand>(
                 Rect{page_rect.x + m_left - viewport_x_, current_page_y + h - m_bottom - viewport_y_, w - m_left - m_right, t},
                 margin_color_
             ));
-            // Left margin line
+            // Left margin line (Body)
             display_list.addCommand(std::make_unique<FillRectCommand>(
                 Rect{page_rect.x + m_left - viewport_x_, current_page_y + m_top - viewport_y_, t, h - m_top - m_bottom},
                 margin_color_
             ));
-            // Right margin line
+            // Right margin line (Body)
             display_list.addCommand(std::make_unique<FillRectCommand>(
                 Rect{page_rect.x + w - m_right - viewport_x_, current_page_y + m_top - viewport_y_, t, h - m_top - m_bottom + t},
                 margin_color_
             ));
+
+            // Header border
+            if (!page->header_blocks.empty()) {
+                Twips hy = page_margins_.top;
+                Twips h_w = w - m_left - m_right;
+                Twips h_h = header_h_only;
+                // Top
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + m_left - viewport_x_, current_page_y + hy - viewport_y_, h_w, t}, margin_color_));
+                // Bottom
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + m_left - viewport_x_, current_page_y + hy + h_h - viewport_y_, h_w, t}, margin_color_));
+                // Left
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + m_left - viewport_x_, current_page_y + hy - viewport_y_, t, h_h}, margin_color_));
+                // Right
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + w - m_right - viewport_x_, current_page_y + hy - viewport_y_, t, h_h + t}, margin_color_));
+            }
+
+            // Footer border
+            if (!page->footer_blocks.empty()) {
+                Twips fy = h - page_margins_.bottom - footer_h_only;
+                Twips f_w = w - m_left - m_right;
+                Twips f_h = footer_h_only;
+                // Top
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + m_left - viewport_x_, current_page_y + fy - viewport_y_, f_w, t}, margin_color_));
+                // Bottom
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + m_left - viewport_x_, current_page_y + fy + f_h - viewport_y_, f_w, t}, margin_color_));
+                // Left
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + m_left - viewport_x_, current_page_y + fy - viewport_y_, t, f_h}, margin_color_));
+                // Right
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x + w - m_right - viewport_x_, current_page_y + fy - viewport_y_, t, f_h + t}, margin_color_));
+            }
+
         }
 
         auto render_block = [&](const BlockBox* block, Twips absolute_x, Twips absolute_y) {
@@ -2091,11 +2215,11 @@ void PlumaEditor::render(IRenderer& renderer) {
                     }
 
                     // Draw selection background if text is selected
-                    if (!selection_.isCollapsed() && run->logical_offset != UINT32_MAX) {
+                    if (!active_doc_->selection.isCollapsed() && run->logical_offset != UINT32_MAX) {
                         uint32_t run_start = run->logical_offset;
                         uint32_t run_end = run_start + run->logical_text.length();
-                        uint32_t sel_start = selection_.getStart();
-                        uint32_t sel_end = selection_.getEnd();
+                        uint32_t sel_start = active_doc_->selection.getStart();
+                        uint32_t sel_end = active_doc_->selection.getEnd();
 
                         uint32_t overlap_start = std::max(run_start, sel_start);
                         uint32_t overlap_end = std::min(run_end, sel_end);
@@ -2192,11 +2316,11 @@ void PlumaEditor::render(IRenderer& renderer) {
                 if (auto fs = block->drop_cap->style.get(PropertyId::FontSize)) desc.size_pt = std::get<float>(*fs);
                 auto run_font = std::make_shared<DummyFont>(desc);
                 
-                if (!selection_.isCollapsed() && block->drop_cap->logical_offset != UINT32_MAX) {
+                if (!active_doc_->selection.isCollapsed() && block->drop_cap->logical_offset != UINT32_MAX) {
                     uint32_t run_start = block->drop_cap->logical_offset;
                     uint32_t run_end = run_start + block->drop_cap->logical_text.length();
-                    uint32_t sel_start = selection_.getStart();
-                    uint32_t sel_end = selection_.getEnd();
+                    uint32_t sel_start = active_doc_->selection.getStart();
+                    uint32_t sel_end = active_doc_->selection.getEnd();
 
                     uint32_t overlap_start = std::max(run_start, sel_start);
                     uint32_t overlap_end = std::min(run_end, sel_end);
@@ -2280,6 +2404,40 @@ void PlumaEditor::render(IRenderer& renderer) {
         for (const auto& block : page->blocks) {
             render_block(block.get(), page_rect.x, current_page_y + block->getBounds().y);
         }
+
+        // Draw overlays for inactive regions to focus user
+        Color overlay_color = 0x77FFFFFF; // ~46% white
+        if (active_region_ == DocumentRegion::Header) {
+            Twips body_start_y = page_margins_.top;
+            if (!page->header_blocks.empty()) {
+                body_start_y = page->header_blocks.back()->getBounds().y + page->header_blocks.back()->getBounds().height;
+            }
+            display_list.addCommand(std::make_unique<FillRectCommand>(
+                Rect{page_rect.x - viewport_x_, current_page_y + body_start_y - viewport_y_, page->getBounds().width, page->getBounds().height - body_start_y}, 
+                overlay_color));
+        } else if (active_region_ == DocumentRegion::Footer) {
+            Twips footer_start_y = Twips(page->getBounds().height.getValue() - page_margins_.bottom.getValue());
+            if (!page->footer_blocks.empty()) {
+                footer_start_y = page->footer_blocks.front()->getBounds().y;
+            }
+            display_list.addCommand(std::make_unique<FillRectCommand>(
+                Rect{page_rect.x - viewport_x_, current_page_y - viewport_y_, page->getBounds().width, footer_start_y}, 
+                overlay_color));
+        } else if (active_region_ == DocumentRegion::Body) {
+            if (!page->header_blocks.empty()) {
+                Twips header_end_y = page->header_blocks.back()->getBounds().y + page->header_blocks.back()->getBounds().height;
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x - viewport_x_, current_page_y - viewport_y_, page->getBounds().width, header_end_y}, 
+                    overlay_color));
+            }
+            if (!page->footer_blocks.empty()) {
+                Twips footer_start_y = page->footer_blocks.front()->getBounds().y;
+                display_list.addCommand(std::make_unique<FillRectCommand>(
+                    Rect{page_rect.x - viewport_x_, current_page_y + footer_start_y - viewport_y_, page->getBounds().width, page->getBounds().height - footer_start_y}, 
+                    overlay_color));
+            }
+        }
+
         current_page_y = current_page_y + page->getBounds().height + page_gap_;
     }
 
@@ -2289,8 +2447,8 @@ void PlumaEditor::render(IRenderer& renderer) {
     }
 
     // Draw the caret if it is visible and there is no active selection
-    if (caret_visible_ && caret_blink_state_ && selection_.isCollapsed()) {
-        auto caret_rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_);
+    if (caret_visible_ && caret_blink_state_ && active_doc_->selection.isCollapsed()) {
+        auto caret_rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_);
         if (caret_rect_opt.has_value()) {
             Rect caret = *caret_rect_opt;
             Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
@@ -2304,7 +2462,7 @@ void PlumaEditor::render(IRenderer& renderer) {
             if (caret_color_.has_value()) {
                 active_caret_color = *caret_color_;
             } else {
-                auto bag = format_registry_.getStyleAt(selection_.head);
+                auto bag = active_doc_->format_registry.getStyleAt(active_doc_->selection.head);
                 if (auto c = bag.get(PropertyId::TextColor)) {
                     active_caret_color = std::get<Color>(*c);
                 }
@@ -2331,8 +2489,8 @@ void PlumaEditor::updateCursorState() {
     if (!cursor_state_callback_) return;
 
     CursorState state;
-    state.logical_offset = selection_.head;
-    state.style = format_registry_.getStyleAt(state.logical_offset);
+    state.logical_offset = active_doc_->selection.head;
+    state.style = active_doc_->format_registry.getStyleAt(state.logical_offset);
 
     // Determine object type based on current selection or text
     if (selected_image_offset_.has_value()) {
@@ -2347,7 +2505,7 @@ void PlumaEditor::updateCursorState() {
         state.object_type = CursorObjectType::TableCell;
     } else {
         // Simple heuristic: check the text at cursor
-        std::string text_str = document_.getText();
+        std::string text_str = active_doc_->document.getText();
         if (state.logical_offset < text_str.length()) {
             if (text_str.substr(state.logical_offset, 7) == "|IMAGE:") {
                 state.object_type = CursorObjectType::Image;
@@ -2368,7 +2526,7 @@ void PlumaEditor::updateCursorState() {
 
 void PlumaEditor::insertTableRowAbove() {
     if (!active_table_offset_.has_value()) return;
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -2402,10 +2560,10 @@ void PlumaEditor::insertTableRowAbove() {
         std::string new_row = "|ROW|\n";
         for (int i=0; i<num_cols; i++) new_row += "|CEL|\n\n";
         
-        undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target_offset, new_row));
-        format_registry_.insertText(target_offset, new_row.length());
-        undo_manager_.commitTransaction();
+        active_doc_->undo_manager.beginTransaction();
+        active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(target_offset, new_row));
+        active_doc_->format_registry.insertText(target_offset, new_row.length());
+        active_doc_->undo_manager.commitTransaction();
         active_table_row_++; // cursor moves down relative to the new row
         updateLayout();
     }
@@ -2413,7 +2571,7 @@ void PlumaEditor::insertTableRowAbove() {
 
 void PlumaEditor::insertTableRowBelow() {
     if (!active_table_offset_.has_value()) return;
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -2450,17 +2608,17 @@ void PlumaEditor::insertTableRowBelow() {
         std::string new_row = "|ROW|\n";
         for (int i=0; i<num_cols; i++) new_row += "|CEL|\n\n";
         
-        undo_manager_.beginTransaction();
-        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target_offset, new_row));
-        format_registry_.insertText(target_offset, new_row.length());
-        undo_manager_.commitTransaction();
+        active_doc_->undo_manager.beginTransaction();
+        active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(target_offset, new_row));
+        active_doc_->format_registry.insertText(target_offset, new_row.length());
+        active_doc_->undo_manager.commitTransaction();
         updateLayout();
     }
 }
 
 void PlumaEditor::insertTableColumnLeft() {
     if (!active_table_offset_.has_value()) return;
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -2501,24 +2659,24 @@ void PlumaEditor::insertTableColumnLeft() {
     }
 
     if (!insert_offsets.empty()) {
-        undo_manager_.beginTransaction();
+        active_doc_->undo_manager.beginTransaction();
         
         // Reverse order to avoid shifting offsets
         for (auto it = insert_offsets.rbegin(); it != insert_offsets.rend(); ++it) {
             std::string new_cel = "|CEL|\n\n";
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(*it, new_cel));
-            format_registry_.insertText(*it, new_cel.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(*it, new_cel));
+            active_doc_->format_registry.insertText(*it, new_cel.length());
         }
         
         // Update col count
         std::string old_num_str = std::to_string(num_cols);
         std::string new_num_str = std::to_string(num_cols + 1);
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
-        format_registry_.deleteText(pos, old_num_str.length());
-        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
-        format_registry_.insertText(pos, new_num_str.length());
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+        active_doc_->format_registry.deleteText(pos, old_num_str.length());
+        active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
+        active_doc_->format_registry.insertText(pos, new_num_str.length());
         
-        undo_manager_.commitTransaction();
+        active_doc_->undo_manager.commitTransaction();
         active_table_col_++; // cursor moves right relative to the new column
         updateLayout();
     }
@@ -2526,7 +2684,7 @@ void PlumaEditor::insertTableColumnLeft() {
 
 void PlumaEditor::insertTableColumnRight() {
     if (!active_table_offset_.has_value()) return;
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -2566,24 +2724,24 @@ void PlumaEditor::insertTableColumnRight() {
     }
 
     if (!insert_offsets.empty()) {
-        undo_manager_.beginTransaction();
+        active_doc_->undo_manager.beginTransaction();
         
         // Reverse order to avoid shifting offsets
         for (auto it = insert_offsets.rbegin(); it != insert_offsets.rend(); ++it) {
             std::string new_cel = "|CEL|\n\n";
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(*it, new_cel));
-            format_registry_.insertText(*it, new_cel.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(*it, new_cel));
+            active_doc_->format_registry.insertText(*it, new_cel.length());
         }
         
         // Update col count
         std::string old_num_str = std::to_string(num_cols);
         std::string new_num_str = std::to_string(num_cols + 1);
-        undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
-        format_registry_.deleteText(pos, old_num_str.length());
-        undo_manager_.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
-        format_registry_.insertText(pos, new_num_str.length());
+        active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+        active_doc_->format_registry.deleteText(pos, old_num_str.length());
+        active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
+        active_doc_->format_registry.insertText(pos, new_num_str.length());
         
-        undo_manager_.commitTransaction();
+        active_doc_->undo_manager.commitTransaction();
         updateLayout();
     }
 }
@@ -2599,7 +2757,7 @@ void PlumaEditor::mergeTableCells() {
     if (min_row == max_row && min_col == max_col) return; // Need at least 2 cells to merge
     
     if (!active_table_offset_.has_value()) return;
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -2714,17 +2872,17 @@ void PlumaEditor::mergeTableCells() {
     
     if (!target_found) return;
 
-    undo_manager_.beginTransaction();
+    active_doc_->undo_manager.beginTransaction();
 
     for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
         if (it->is_merged && !it->is_target) {
             size_t len = it->end_offset - it->start_offset;
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
-            format_registry_.deleteText(it->start_offset, len);
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+            active_doc_->format_registry.deleteText(it->start_offset, len);
         } else if (it->is_target) {
             size_t len = it->end_offset - it->start_offset;
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
-            format_registry_.deleteText(it->start_offset, len);
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+            active_doc_->format_registry.deleteText(it->start_offset, len);
             
             int new_colspan = target_cell.colspan + (max_col - min_col);
             int new_rowspan = target_cell.rowspan + (max_row - min_row);
@@ -2737,12 +2895,12 @@ void PlumaEditor::mergeTableCells() {
             if (!combined_content.empty()) {
                 new_cel_tag += combined_content + "\n";
             }
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel_tag));
-            format_registry_.insertText(it->start_offset, new_cel_tag.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel_tag));
+            active_doc_->format_registry.insertText(it->start_offset, new_cel_tag.length());
         }
     }
     
-    undo_manager_.commitTransaction();
+    active_doc_->undo_manager.commitTransaction();
     updateLayout();
     
     table_selection_.mode = TableSelectionMode::None;
@@ -2752,7 +2910,7 @@ void PlumaEditor::mergeTableCells() {
 
 void PlumaEditor::splitTableCells(bool horizontally) {
     if (!active_table_offset_.has_value()) return;
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -2863,7 +3021,7 @@ void PlumaEditor::splitTableCells(bool horizontally) {
     
     if (!target) return;
     
-    undo_manager_.beginTransaction();
+    active_doc_->undo_manager.beginTransaction();
     
     if (horizontally) {
         if (target->colspan >= 2) {
@@ -2871,8 +3029,8 @@ void PlumaEditor::splitTableCells(bool horizontally) {
             int right_colspan = target->colspan - left_colspan;
             
             size_t len = target->end_offset - target->start_offset;
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(target->start_offset, len));
-            format_registry_.deleteText(target->start_offset, len);
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(target->start_offset, len));
+            active_doc_->format_registry.deleteText(target->start_offset, len);
             
             std::string new_cells = "|CEL";
             if (left_colspan > 1) new_cells += ":colspan=" + std::to_string(left_colspan);
@@ -2886,16 +3044,16 @@ void PlumaEditor::splitTableCells(bool horizontally) {
             if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
             new_cells += "|\n\n";
             
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target->start_offset, new_cells));
-            format_registry_.insertText(target->start_offset, new_cells.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(target->start_offset, new_cells));
+            active_doc_->format_registry.insertText(target->start_offset, new_cells.length());
             
         } else {
             for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
                 bool intersects = (target->col >= it->col && target->col < it->col + it->colspan);
                 if (intersects && !it->is_target) {
                     size_t len = it->end_offset - it->start_offset;
-                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
-                    format_registry_.deleteText(it->start_offset, len);
+                    active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    active_doc_->format_registry.deleteText(it->start_offset, len);
                     
                     std::string new_cel = "|CEL:colspan=" + std::to_string(it->colspan + 1);
                     if (it->rowspan > 1) new_cel += ":rowspan=" + std::to_string(it->rowspan);
@@ -2903,12 +3061,12 @@ void PlumaEditor::splitTableCells(bool horizontally) {
                     if (!it->content.empty()) new_cel += it->content + "\n";
                     else new_cel += "\n";
                     
-                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel));
-                    format_registry_.insertText(it->start_offset, new_cel.length());
+                    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel));
+                    active_doc_->format_registry.insertText(it->start_offset, new_cel.length());
                 } else if (it->is_target) {
                     size_t len = it->end_offset - it->start_offset;
-                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
-                    format_registry_.deleteText(it->start_offset, len);
+                    active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    active_doc_->format_registry.deleteText(it->start_offset, len);
                     
                     std::string new_cells = "|CEL";
                     if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
@@ -2920,16 +3078,16 @@ void PlumaEditor::splitTableCells(bool horizontally) {
                     if (target->rowspan > 1) new_cells += ":rowspan=" + std::to_string(target->rowspan);
                     new_cells += "|\n\n";
                     
-                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cells));
-                    format_registry_.insertText(it->start_offset, new_cells.length());
+                    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cells));
+                    active_doc_->format_registry.insertText(it->start_offset, new_cells.length());
                 }
             }
             std::string old_num_str = std::to_string(num_cols);
             std::string new_num_str = std::to_string(num_cols + 1);
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
-            format_registry_.deleteText(pos, old_num_str.length());
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
-            format_registry_.insertText(pos, new_num_str.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+            active_doc_->format_registry.deleteText(pos, old_num_str.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
+            active_doc_->format_registry.insertText(pos, new_num_str.length());
         }
     } else {
         if (target->rowspan >= 2) {
@@ -2949,12 +3107,12 @@ void PlumaEditor::splitTableCells(bool horizontally) {
             if (bottom_rowspan > 1) new_bottom += ":rowspan=" + std::to_string(bottom_rowspan);
             new_bottom += "|\n\n";
             
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_offset, new_bottom));
-            format_registry_.insertText(insert_offset, new_bottom.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(insert_offset, new_bottom));
+            active_doc_->format_registry.insertText(insert_offset, new_bottom.length());
 
             size_t len = target->end_offset - target->start_offset;
-            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(target->start_offset, len));
-            format_registry_.deleteText(target->start_offset, len);
+            active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(target->start_offset, len));
+            active_doc_->format_registry.deleteText(target->start_offset, len);
             
             std::string new_top = "|CEL";
             if (target->colspan > 1) new_top += ":colspan=" + std::to_string(target->colspan);
@@ -2963,8 +3121,8 @@ void PlumaEditor::splitTableCells(bool horizontally) {
             if (!target->content.empty()) new_top += target->content + "\n";
             else new_top += "\n";
             
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target->start_offset, new_top));
-            format_registry_.insertText(target->start_offset, new_top.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(target->start_offset, new_top));
+            active_doc_->format_registry.insertText(target->start_offset, new_top.length());
             
         } else {
             size_t insert_offset = 0;
@@ -2978,15 +3136,15 @@ void PlumaEditor::splitTableCells(bool horizontally) {
             if (target->colspan > 1) new_row += ":colspan=" + std::to_string(target->colspan);
             new_row += "|\n\n";
             
-            undo_manager_.addCommand(std::make_unique<InsertTextCommand>(insert_offset, new_row));
-            format_registry_.insertText(insert_offset, new_row.length());
+            active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(insert_offset, new_row));
+            active_doc_->format_registry.insertText(insert_offset, new_row.length());
 
             for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
                 bool intersects = (target->row >= it->row && target->row < it->row + it->rowspan);
                 if (intersects && !it->is_target) {
                     size_t len = it->end_offset - it->start_offset;
-                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
-                    format_registry_.deleteText(it->start_offset, len);
+                    active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    active_doc_->format_registry.deleteText(it->start_offset, len);
                     
                     std::string new_cel = "|CEL";
                     if (it->colspan > 1) new_cel += ":colspan=" + std::to_string(it->colspan);
@@ -2995,12 +3153,12 @@ void PlumaEditor::splitTableCells(bool horizontally) {
                     if (!it->content.empty()) new_cel += it->content + "\n";
                     else new_cel += "\n";
                     
-                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel));
-                    format_registry_.insertText(it->start_offset, new_cel.length());
+                    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cel));
+                    active_doc_->format_registry.insertText(it->start_offset, new_cel.length());
                 } else if (it->is_target) {
                     size_t len = it->end_offset - it->start_offset;
-                    undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
-                    format_registry_.deleteText(it->start_offset, len);
+                    active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(it->start_offset, len));
+                    active_doc_->format_registry.deleteText(it->start_offset, len);
                     
                     std::string new_cells = "|CEL";
                     if (target->colspan > 1) new_cells += ":colspan=" + std::to_string(target->colspan);
@@ -3008,14 +3166,14 @@ void PlumaEditor::splitTableCells(bool horizontally) {
                     if (!target->content.empty()) new_cells += target->content + "\n";
                     else new_cells += "\n";
                     
-                    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cells));
-                    format_registry_.insertText(it->start_offset, new_cells.length());
+                    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(it->start_offset, new_cells));
+                    active_doc_->format_registry.insertText(it->start_offset, new_cells.length());
                 }
             }
         }
     }
     
-    undo_manager_.commitTransaction();
+    active_doc_->undo_manager.commitTransaction();
     updateLayout();
     
     table_selection_.mode = TableSelectionMode::None;
@@ -3027,7 +3185,7 @@ void PlumaEditor::splitTable() {
     if (!active_table_offset_.has_value()) return;
     if (active_table_row_ <= 0) return; // Cannot split at the first row
     
-    std::string text = document_.getText();
+    std::string text = active_doc_->document.getText();
     uint32_t table_start = *active_table_offset_;
     if (text.substr(table_start, 10) != "|TBL:cols=") return;
 
@@ -3103,11 +3261,11 @@ void PlumaEditor::splitTable() {
 
     if (!found_target_row) return;
 
-    undo_manager_.beginTransaction();
+    active_doc_->undo_manager.beginTransaction();
     std::string insertion = "|ENDTBL|\n\n|TBL:cols=" + cols_str + "|\n";
-    undo_manager_.addCommand(std::make_unique<InsertTextCommand>(target_row_offset, insertion));
-    format_registry_.insertText(target_row_offset, insertion.length());
-    undo_manager_.commitTransaction();
+    active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(target_row_offset, insertion));
+    active_doc_->format_registry.insertText(target_row_offset, insertion.length());
+    active_doc_->undo_manager.commitTransaction();
 
     updateLayout();
     
@@ -3119,7 +3277,7 @@ void PlumaEditor::splitTable() {
 
 uint32_t PlumaEditor::getCurrentPageNumber() const {
     if (current_pages_.empty()) return 1;
-    auto rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_);
+    auto rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_);
     if (!rect_opt) return 1;
     pluma::Twips y = rect_opt->y;
     pluma::Twips page_total_height = page_size_.height + page_gap_;

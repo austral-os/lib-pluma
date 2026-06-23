@@ -64,7 +64,8 @@ enum class EditorAction {
     Copy,
     Paste,
     Cut,
-    ToggleInsertMode
+    ToggleInsertMode,
+    Cancel
 };
 
 /**

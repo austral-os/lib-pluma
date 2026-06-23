@@ -10,6 +10,7 @@
 #include <pluma/Render/ImageMask.hpp>
 #include <unordered_map>
 #include <mutex>
+#include <functional>
 
 namespace pluma {
 
@@ -31,41 +32,71 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     PageMargins margins, 
     const FormatRegistry& registry,
     std::string_view header_text,
+    const FormatRegistry* header_registry,
     std::string_view footer_text,
+    const FormatRegistry* footer_registry,
+    const std::function<bool(int)>& has_header_cb,
+    const std::function<bool(int)>& has_footer_cb,
     uint32_t logical_offset_base
 ) {
     std::vector<std::unique_ptr<PageBox>> pages;
     
-    if (text.empty()) {
-        auto empty_page = std::make_unique<PageBox>();
-        empty_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
 
-        auto empty_block = std::make_unique<BlockBox>();
-        auto empty_line = std::make_unique<LineBox>();
-        auto dummy_run = std::make_unique<RunBox>();
+
+
+    
+    auto setup_page = [&](std::unique_ptr<PageBox>& page, int page_idx, Twips& start_y, Twips& avail_height) {
+        page = std::make_unique<PageBox>();
+        page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+        Twips header_h(0), footer_h(0);
         
-        dummy_run->logical_offset = logical_offset_base;
-        dummy_run->setBounds({Twips(0), Twips(0), Twips(0), Twips(240)});
-        empty_line->runs.push_back(std::move(dummy_run));
-        empty_line->setBounds({Twips(0), Twips(0), Twips(0), Twips(240)});
-        empty_block->lines.push_back(std::move(empty_line));
-        empty_block->setBounds({margins.left, margins.top, Twips(page_size.width.getValue() - margins.left.getValue() - margins.right.getValue()), Twips(240)});
+        if (has_header_cb && has_header_cb(page_idx) && !header_text.empty() && header_registry) {
+            auto h_pages = layoutText(header_text, page_size, margins, *header_registry);
+            if (!h_pages.empty()) {
+                page->header_blocks = std::move(h_pages[0]->blocks);
+                Twips h_y(margins.top);
+                for (auto& b : page->header_blocks) {
+                    b->setBounds({b->getBounds().x, h_y, b->getBounds().width, b->getBounds().height});
+                    h_y = h_y + b->getBounds().height;
+                }
+                header_h = h_y - margins.top;
+            }
+        }
         
-        empty_page->blocks.push_back(std::move(empty_block));
-        pages.push_back(std::move(empty_page));
-        return pages;
-    }
-
-
+        if (has_footer_cb && has_footer_cb(page_idx) && !footer_text.empty() && footer_registry) {
+            auto f_pages = layoutText(footer_text, page_size, margins, *footer_registry);
+            if (!f_pages.empty()) {
+                page->footer_blocks = std::move(f_pages[0]->blocks);
+                Twips f_y(page_size.height.getValue() - margins.bottom.getValue());
+                // Adjust f_y to grow upwards or just place it
+                Twips total_f_h(0);
+                for (auto& b : page->footer_blocks) total_f_h = total_f_h + b->getBounds().height;
+                f_y = f_y - total_f_h;
+                
+                for (auto& b : page->footer_blocks) {
+                    b->setBounds({b->getBounds().x, f_y, b->getBounds().width, b->getBounds().height});
+                    f_y = f_y + b->getBounds().height;
+                }
+                footer_h = total_f_h;
+            }
+        }
+        
+        start_y = margins.top;
+        if (header_h.getValue() > 0) start_y = start_y + header_h + Twips(240);
+        
+        Twips bottom = margins.bottom;
+        if (footer_h.getValue() > 0) bottom = bottom + footer_h + Twips(240);
+        
+        avail_height = Twips(page_size.height.getValue() - start_y.getValue() - bottom.getValue());
+    };
 
     Twips content_width(page_size.width.getValue() - margins.left.getValue() - margins.right.getValue());
-    Twips content_height(page_size.height.getValue() - margins.top.getValue() - margins.bottom.getValue());
     if (content_width.getValue() <= 0) content_width = Twips(1);
-    if (content_height.getValue() <= 0) content_height = Twips(1);
 
-    auto current_page = std::make_unique<PageBox>();
-    current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
-    Twips current_page_y = margins.top;
+    std::unique_ptr<PageBox> current_page;
+    Twips current_page_y(0);
+    Twips content_height(0);
+    setup_page(current_page, pages.size() + 1, current_page_y, content_height);
     Twips column_start_y = margins.top;
     Twips max_page_y = margins.top;
 
@@ -145,11 +176,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
 
         if (para.length() >= 11 && para.substr(0, 11) == "|PAGEBREAK|") {
             pages.push_back(std::move(current_page));
-            current_page = std::make_unique<PageBox>();
-            current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
-            current_page_y = margins.top;
-            column_start_y = margins.top;
-            max_page_y = margins.top;
+            setup_page(current_page, pages.size() + 1, current_page_y, content_height);
+            column_start_y = current_page_y;
+            max_page_y = current_page_y;
             current_column = 0;
             logical_offset += para.length() + 1;
             continue;
@@ -157,15 +186,12 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
 
         if (para.length() >= 11 && para.substr(0, 11) == "|BLANKPAGE|") {
             pages.push_back(std::move(current_page));
-            current_page = std::make_unique<PageBox>();
-            current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+            setup_page(current_page, pages.size() + 1, current_page_y, content_height);
             current_page->blank_page_offset = logical_offset;
             pages.push_back(std::move(current_page));
-            current_page = std::make_unique<PageBox>();
-            current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
-            current_page_y = margins.top;
-            column_start_y = margins.top;
-            max_page_y = margins.top;
+            setup_page(current_page, pages.size() + 1, current_page_y, content_height);
+            column_start_y = current_page_y;
+            max_page_y = current_page_y;
             current_column = 0;
             logical_offset += para.length() + 1;
             continue;
@@ -397,7 +423,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -440,7 +466,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
                         
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -496,7 +522,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
                         
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", "", logical_offset_base + cell_offset_base);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base);
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -911,6 +937,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             bool has_space_after = (!is_field && run_end < para.length() && para[run_end] == ' ');
 
             std::string word = para.substr(start, run_end - start);
+            if (has_space_after) {
+                word += " ";
+            }
             std::string display_text = word;
 
             if (is_field) {
@@ -934,8 +963,6 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 } else if (word == "|FIELD:PAGE|") {
                     display_text = std::to_string(pages.size() + 1);
                 }
-            } else if (has_space_after) {
-                display_text += " ";
             }
 
             FontDescriptor desc = font_->getDescriptor();
@@ -1188,11 +1215,9 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         current_page_y = column_start_y;
                     } else {
                         pages.push_back(std::move(current_page));
-                        current_page = std::make_unique<PageBox>();
-                        current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
-                        current_page_y = margins.top;
-                        column_start_y = margins.top;
-                        max_page_y = margins.top;
+                        setup_page(current_page, pages.size() + 1, current_page_y, content_height);
+            column_start_y = current_page_y;
+            max_page_y = current_page_y;
                         current_column = 0;
                     }
                     continue; // Retry fitting on the clean page/column
@@ -1247,73 +1272,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         pages.push_back(std::move(current_page));
     }
 
-    // Process headers and footers with page numbers
-    int total_pages = pages.size();
-    for (int i = 0; i < total_pages; ++i) {
-        if (!header_text.empty()) {
-            pages[i]->header_blocks = layoutHeaderFooter(header_text, i + 1, total_pages, page_size, margins);
-            Twips header_y = Twips(margins.top.getValue() / 2);
-            for (auto& b : pages[i]->header_blocks) {
-                b->setBounds({b->getBounds().x, header_y, b->getBounds().width, b->getBounds().height});
-                header_y = header_y + b->getBounds().height;
-                // Mark logical offsets as UINT32_MAX
-                for (auto& l : b->lines) {
-                    for (auto& r : l->runs) { r->logical_offset = UINT32_MAX; }
-                }
-            }
-        }
-        if (!footer_text.empty()) {
-            pages[i]->footer_blocks = layoutHeaderFooter(footer_text, i + 1, total_pages, page_size, margins);
-            Twips footer_y = Twips(page_size.height.getValue() - (margins.bottom.getValue() / 2));
-            for (auto& b : pages[i]->footer_blocks) {
-                b->setBounds({b->getBounds().x, footer_y, b->getBounds().width, b->getBounds().height});
-                footer_y = footer_y + b->getBounds().height;
-                for (auto& l : b->lines) {
-                    for (auto& r : l->runs) { r->logical_offset = UINT32_MAX; }
-                }
-            }
-        }
-    }
-
     return pages;
-}
-
-std::vector<std::unique_ptr<BlockBox>> LayoutEngine::layoutHeaderFooter(
-    std::string_view text,
-    int page_num,
-    int total_pages,
-    PageSize page_size,
-    PageMargins margins
-) {
-    std::string processed(text);
-    
-    // Replace dynamic variables
-    auto replace_all = [](std::string& s, const std::string& from, const std::string& to) {
-        size_t start_pos = 0;
-        while((start_pos = s.find(from, start_pos)) != std::string::npos) {
-            s.replace(start_pos, from.length(), to);
-            start_pos += to.length();
-        }
-    };
-    
-    replace_all(processed, "{PAGE}", std::to_string(page_num));
-    replace_all(processed, "{NUMPAGES}", std::to_string(total_pages));
-    replace_all(processed, "{DATE}", "2026-05-24"); // Dummy date
-
-    FormatRegistry empty_registry;
-    PageMargins hf_margins = {margins.left, Twips(0), margins.right, Twips(0)};
-    PageSize hf_size = {page_size.width, Twips(5000)}; // Arbitrary height for HF
-    
-    // Recursive layout
-    auto pages = layoutText(processed, hf_size, hf_margins, empty_registry, "", "");
-    
-    std::vector<std::unique_ptr<BlockBox>> result;
-    if (!pages.empty() && pages[0]) {
-        for (auto& b : pages[0]->blocks) {
-            result.push_back(std::move(b));
-        }
-    }
-    return result;
 }
 
 } // namespace pluma

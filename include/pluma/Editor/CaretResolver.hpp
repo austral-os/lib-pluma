@@ -29,7 +29,7 @@ public:
      * @param page_gap The vertical gap between pages.
      * @return std::optional containing the physical Rect if found.
      */
-    static std::optional<Rect> resolveLogicalToPhysical(const std::vector<std::unique_ptr<PageBox>>& pages, uint32_t logical_offset, Twips page_gap);
+    static std::optional<Rect> resolveLogicalToPhysical(const std::vector<std::unique_ptr<PageBox>>& pages, uint32_t logical_offset, Twips page_gap, DocumentRegion region = DocumentRegion::Body);
 
     /**
      * @brief Resolves a physical coordinate to a logical text offset.
@@ -43,7 +43,7 @@ public:
      * @param page_gap The vertical gap between pages.
      * @return std::optional containing the logical offset if found.
      */
-    static std::optional<uint32_t> resolvePhysicalToLogical(const std::vector<std::unique_ptr<PageBox>>& pages, Twips x, Twips y, Twips page_gap);
+    static std::optional<uint32_t> resolvePhysicalToLogical(const std::vector<std::unique_ptr<PageBox>>& pages, Twips x, Twips y, Twips page_gap, DocumentRegion region = DocumentRegion::Body);
 };
 
 } // namespace pluma

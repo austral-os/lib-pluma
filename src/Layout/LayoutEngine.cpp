@@ -142,6 +142,33 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             }
         }
 
+        if (para.length() >= 11 && para.substr(0, 11) == "|PAGEBREAK|") {
+            pages.push_back(std::move(current_page));
+            current_page = std::make_unique<PageBox>();
+            current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+            current_page_y = margins.top;
+            column_start_y = margins.top;
+            max_page_y = margins.top;
+            current_column = 0;
+            logical_offset += para.length() + 1;
+            continue;
+        }
+
+        if (para.length() >= 11 && para.substr(0, 11) == "|BLANKPAGE|") {
+            pages.push_back(std::move(current_page));
+            current_page = std::make_unique<PageBox>();
+            current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+            pages.push_back(std::move(current_page));
+            current_page = std::make_unique<PageBox>();
+            current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+            current_page_y = margins.top;
+            column_start_y = margins.top;
+            max_page_y = margins.top;
+            current_column = 0;
+            logical_offset += para.length() + 1;
+            continue;
+        }
+
         Twips total_gap = Twips(column_gap.getValue() * (total_columns - 1));
         Twips column_width = Twips((base_content_width.getValue() - total_gap.getValue()) / total_columns);
         content_width = column_width;
@@ -826,8 +853,39 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         while (start < para.length()) {
             PropertyBag word_style = registry.getStyleAt(logical_offset_base + logical_offset + start);
 
+            if (para[start] == '\v') {
+                // Force line break
+                Twips line_height = Twips(240); // 12pt approx
+                for (const auto& r : current_line->runs) {
+                    Twips h = r->run.max_ascent + r->run.max_descent;
+                    if (h.getValue() > line_height.getValue()) line_height = h;
+                }
+                float line_spacing = 1.0f;
+                if (auto ls = para_style.get(PropertyId::LineSpacing)) {
+                    line_spacing = std::get<float>(*ls);
+                }
+                line_height = Twips(line_height.getValue() * line_spacing);
+
+                current_line->setBounds({Twips(0), current_y, current_x, line_height});
+                block->lines.push_back(std::move(current_line));
+
+                current_line = std::make_unique<LineBox>();
+                current_y = current_y + line_height;
+                current_x = block->list_indent + para_left_indent;
+                
+                auto run_box = std::make_unique<RunBox>();
+                run_box->logical_text = "\v";
+                run_box->logical_offset = logical_offset_base + logical_offset + start;
+                run_box->style = std::move(word_style);
+                run_box->setBounds({current_x, Twips(0), Twips(0), line_height});
+                current_line->runs.push_back(std::move(run_box));
+                
+                start++;
+                continue;
+            }
+
             size_t run_end = start;
-            while (run_end < para.length() && para[run_end] != ' ') {
+            while (run_end < para.length() && para[run_end] != ' ' && para[run_end] != '\v') {
                 PropertyBag next_style = registry.getStyleAt(logical_offset_base + logical_offset + run_end);
                 if (!stylesAreEqual(word_style, next_style)) {
                     break;

@@ -7,7 +7,7 @@ using namespace pluma;
 
 TEST_CASE("UndoManager basic transactions", "[undo]") {
     PieceTable pt("Hello");
-    UndoManager history(pt);
+    pluma::FormatRegistry fr; UndoManager history(pt, fr);
 
     REQUIRE(pt.getText() == "Hello");
     REQUIRE_FALSE(history.canUndo());

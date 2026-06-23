@@ -1954,6 +1954,13 @@ void PlumaEditor::render(IRenderer& renderer) {
                 if (auto l = style.get(pluma::PropertyId::BorderLeftStyle)) left_style = std::get<int>(*l);
                 if (auto l = style.get(pluma::PropertyId::BorderRightStyle)) right_style = std::get<int>(*l);
 
+                if (auto l = style.get(pluma::PropertyId::BackgroundColor)) {
+                    Color cbg = std::get<Color>(*l);
+                    if ((cbg & 0xFF000000) != 0) {
+                        display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx, cy, cw, ch}, cbg));
+                    }
+                }
+
                 if (draw_top) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx, cy, cw, thick}, Point{cx, cy}, Point{cx + cw, cy}, top_width, top_color, top_style));
                 if (draw_bottom) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx, cy + ch, cw, thick}, Point{cx, cy + ch}, Point{cx + cw, cy + ch}, bottom_width, bottom_color, bottom_style));
                 if (draw_left) display_list.addCommand(std::make_unique<DrawLineCommand>(Rect{cx, cy, thick, ch}, Point{cx, cy}, Point{cx, cy + ch}, left_width, left_color, left_style));

@@ -23,6 +23,7 @@ public:
     void deleteText(uint32_t offset, uint32_t length);
 
     const std::vector<StyleSpan>& getSpans() const { return spans_; }
+    void setSpans(const std::vector<StyleSpan>& spans) { spans_ = spans; }
 
 private:
     std::vector<StyleSpan> spans_;

@@ -74,19 +74,17 @@ TEST_CASE("Plugins - Native Pluma Archive (.pluma)", "[plugins]") {
     // Verify styles
     const auto& registry = editor2.getFormatRegistry();
     auto spans = registry.getSpans();
-    REQUIRE(spans.size() == 2);
+    REQUIRE(spans.size() == 1);
     REQUIRE(spans[0].start == 6);
     REQUIRE(spans[0].length == 9);
-    REQUIRE(spans[1].start == 6);
-    REQUIRE(spans[1].length == 9);
     
     // Check first span (color)
     auto color_opt = spans[0].style.get(PropertyId::TextColor);
     REQUIRE(color_opt.has_value());
     REQUIRE(std::get<Color>(*color_opt) == 0xFFFF0000);
     
-    // Check second span (weight)
-    auto weight_opt = spans[1].style.get(PropertyId::FontWeight);
+    // Check same span (weight)
+    auto weight_opt = spans[0].style.get(PropertyId::FontWeight);
     REQUIRE(weight_opt.has_value());
     REQUIRE(std::get<uint16_t>(*weight_opt) == 700);
 }

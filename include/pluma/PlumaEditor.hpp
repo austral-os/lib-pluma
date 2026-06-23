@@ -420,6 +420,7 @@ private:
     void updateLayout();
 
     PieceTable document_;
+    FormatRegistry format_registry_;
     UndoManager undo_manager_;
     DOMManager dom_manager_;
     std::shared_ptr<ITextShaper> shaper_;
@@ -435,7 +436,6 @@ private:
     Twips page_gap_{400}; // approx 26 pixels gap between pages
     PageSize page_size_{PageSizes::A4};
     PageMargins page_margins_{};
-    FormatRegistry format_registry_;
     bool show_margins_{false};
     Color margin_color_{0xAAFF0000};
     Color workspace_bg_color_{0xFFE0E0E0};

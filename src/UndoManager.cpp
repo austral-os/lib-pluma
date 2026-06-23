@@ -3,8 +3,8 @@
 
 namespace pluma {
 
-UndoManager::UndoManager(PieceTable& table)
-    : table_(table) {
+UndoManager::UndoManager(PieceTable& table, FormatRegistry& registry)
+    : table_(table), registry_(registry) {
 }
 
 void UndoManager::beginTransaction() {
@@ -13,6 +13,7 @@ void UndoManager::beginTransaction() {
     }
     current_transaction_ = std::make_unique<Transaction>();
     snapshot_before_transaction_ = table_.createSnapshot();
+    snapshot_before_format_ = { registry_.getSpans() };
 }
 
 void UndoManager::addCommand(std::unique_ptr<Command> cmd) {
@@ -38,8 +39,10 @@ void UndoManager::commitTransaction() {
 
     HistoryEntry entry{
         std::move(snapshot_before_transaction_),
+        std::move(snapshot_before_format_),
         std::move(current_transaction_), // transaction becomes shared via shared_ptr conversion if we used it, but let's just move
-        std::move(after_snapshot)
+        std::move(after_snapshot),
+        { registry_.getSpans() }
     };
 
     history_.push_back(std::move(entry));
@@ -54,8 +57,10 @@ void UndoManager::rollbackTransaction() {
         throw std::logic_error("No transaction in progress");
     }
     table_.restoreSnapshot(snapshot_before_transaction_);
+    registry_.setSpans(snapshot_before_format_.spans);
     current_transaction_.reset();
     snapshot_before_transaction_.reset();
+    snapshot_before_format_.spans.clear();
 }
 
 bool UndoManager::canUndo() const {
@@ -71,12 +76,14 @@ void UndoManager::undo() {
 
     current_index_--;
     table_.restoreSnapshot(history_[current_index_].before_snapshot);
+    registry_.setSpans(history_[current_index_].before_format.spans);
 }
 
 void UndoManager::redo() {
     if (!canRedo()) return;
 
     table_.restoreSnapshot(history_[current_index_].after_snapshot);
+    registry_.setSpans(history_[current_index_].after_format.spans);
     current_index_++;
 }
 

@@ -8,6 +8,7 @@
 #include <memory>
 #include <pluma/Transaction.hpp>
 #include <pluma/PieceTable.hpp>
+#include <pluma/Style/FormatRegistry.hpp>
 
 namespace pluma {
 
@@ -18,10 +19,11 @@ namespace pluma {
 class UndoManager {
 public:
     /**
-     * @brief Constructs an UndoManager linked to a specific PieceTable.
+     * @brief Constructs an UndoManager linked to a specific PieceTable and FormatRegistry.
      * @param table The piece table to manage.
+     * @param registry The format registry to manage.
      */
-    explicit UndoManager(PieceTable& table);
+    explicit UndoManager(PieceTable& table, FormatRegistry& registry);
 
     /**
      * @brief Begins a new transaction block.
@@ -70,11 +72,18 @@ public:
 
 private:
     PieceTable& table_;
+    FormatRegistry& registry_;
+
+    struct FormatSnapshot {
+        std::vector<StyleSpan> spans;
+    };
 
     struct HistoryEntry {
         std::shared_ptr<DocumentSnapshot> before_snapshot;
+        FormatSnapshot before_format;
         std::shared_ptr<Transaction> transaction;
         std::shared_ptr<DocumentSnapshot> after_snapshot;
+        FormatSnapshot after_format;
     };
 
     std::vector<HistoryEntry> history_;
@@ -82,6 +91,7 @@ private:
 
     std::unique_ptr<Transaction> current_transaction_;
     std::shared_ptr<DocumentSnapshot> snapshot_before_transaction_;
+    FormatSnapshot snapshot_before_format_;
 };
 
 } // namespace pluma

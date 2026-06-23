@@ -6,7 +6,7 @@
 namespace pluma {
 
 PlumaEditor::PlumaEditor(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font)
-    : undo_manager_(document_),
+    : undo_manager_(document_, format_registry_),
       shaper_(std::move(shaper)),
       default_font_(std::move(default_font)),
       layout_engine_(shaper_, default_font_) {
@@ -122,6 +122,14 @@ void PlumaEditor::setPageGap(Twips gap) {
 }
 
 void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, PropertyValue value) {
+    bool is_spelling = (id == PropertyId::Decoration && 
+                        std::holds_alternative<TextDecoration>(value) && 
+                        std::get<TextDecoration>(value) == TextDecoration::SpellingError);
+
+    if (!is_spelling) {
+        undo_manager_.beginTransaction();
+    }
+
     if (table_selection_.mode != TableSelectionMode::None) {
         std::string doc_text = document_.getText();
         uint32_t offset = table_selection_.table_offset;
@@ -217,12 +225,16 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
     } else {
         format_registry_.applyStyle(start, length, id, value);
     }
-    updateLayout();
+    
+    if (!is_spelling) {
+        undo_manager_.commitTransaction();
+        updateLayout();
+    }
 }
 
-void PlumaEditor::clearDecorationGlobally(TextDecoration dec) {
-    format_registry_.clearDecorationGlobally(dec);
-    updateLayout();
+void PlumaEditor::clearDecorationGlobally(TextDecoration target_dec) {
+    format_registry_.clearDecorationGlobally(target_dec);
+    // Decorations don't affect layout, no need to updateLayout()
 }
 
 void PlumaEditor::setViewport(Twips width, Twips height) {

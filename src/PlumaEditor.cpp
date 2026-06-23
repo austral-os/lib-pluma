@@ -2025,6 +2025,14 @@ void PlumaEditor::render(IRenderer& renderer) {
                             if (auto fi = run->style.get(PropertyId::FontStyleItalic)) desc.italic = std::get<bool>(*fi);
                             auto run_font = std::make_shared<DummyFont>(desc);
 
+                            // Draw text background if specified
+                            if (auto bg = run->style.get(PropertyId::BackgroundColor)) {
+                                Color bg_color = std::get<Color>(*bg);
+                                if ((bg_color & 0xFF000000) != 0) {
+                                    display_list.addCommand(std::make_unique<FillRectCommand>(run_rect, bg_color));
+                                }
+                            }
+
                             if (!active_doc_->selection.isCollapsed() && run->logical_offset != UINT32_MAX) {
                                 uint32_t run_start  = run->logical_offset;
                                 uint32_t run_end    = run_start + (uint32_t)run->logical_text.length();
@@ -2045,14 +2053,6 @@ void PlumaEditor::render(IRenderer& renderer) {
                                     }
                                     Rect sel_rect{run_rect.x + sel_x, run_rect.y, sel_w, run_rect.height};
                                     display_list.addCommand(std::make_unique<FillRectCommand>(sel_rect, selection_color_));
-                                }
-                            }
-
-                            // Draw text background if specified
-                            if (auto bg = run->style.get(PropertyId::BackgroundColor)) {
-                                Color bg_color = std::get<Color>(*bg);
-                                if ((bg_color & 0xFF000000) != 0) {
-                                    display_list.addCommand(std::make_unique<FillRectCommand>(run_rect, bg_color));
                                 }
                             }
 

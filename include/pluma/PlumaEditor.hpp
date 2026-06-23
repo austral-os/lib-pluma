@@ -445,6 +445,16 @@ public:
     /**
      * @brief Exposes the format registry for serialization.
      */
+    const std::string getHeaderText() const { return header_doc_.document.getText(); }
+    const std::string getFooterText() const { return footer_doc_.document.getText(); }
+    const FormatRegistry& getHeaderFormatRegistry() const { return header_doc_.format_registry; }
+    const FormatRegistry& getFooterFormatRegistry() const { return footer_doc_.format_registry; }
+    
+    void setHeaderText(const std::string& text) { header_doc_.document = PieceTable(text); }
+    void setFooterText(const std::string& text) { footer_doc_.document = PieceTable(text); }
+    FormatRegistry& getHeaderFormatRegistryMutable() { return header_doc_.format_registry; }
+    FormatRegistry& getFooterFormatRegistryMutable() { return footer_doc_.format_registry; }
+
     const FormatRegistry& getFormatRegistry() const { return active_doc_->format_registry; }
 
     /**

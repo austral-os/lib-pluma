@@ -69,52 +69,75 @@ bool PlumaArchiveImporter::importFile(const std::string& filename, PlumaEditor& 
     try {
         json doc = json::parse(content);
         
-        if (doc.contains("text")) {
-            std::string doc_text = doc["text"].get<std::string>();
+        std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / 
+            ("pluma_assets_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(temp_dir);
+        
+        zip_int64_t num_entries = zip_get_num_entries(archive, 0);
+        for (zip_int64_t i = 0; i < num_entries; i++) {
+            const char* name = zip_get_name(archive, i, 0);
+            if (name && std::string(name).find("assets/") == 0) {
+                zip_file_t* asset_zf = zip_fopen_index(archive, i, 0);
+                if (asset_zf) {
+                    zip_stat_t asset_sb;
+                    zip_stat_index(archive, i, 0, &asset_sb);
+                    std::vector<char> asset_buf(asset_sb.size);
+                    zip_fread(asset_zf, asset_buf.data(), asset_sb.size);
+                    zip_fclose(asset_zf);
+                    
+                    std::filesystem::path asset_path = temp_dir / std::filesystem::path(name).filename();
+                    std::ofstream out(asset_path, std::ios::binary);
+                    out.write(asset_buf.data(), asset_buf.size());
+                    out.close();
+                }
+            }
+        }
+        
+        auto load_region = [&](const json& region_obj, DocumentRegion region_enum) {
+            editor.setActiveRegion(region_enum);
+            std::string doc_text = region_obj["text"].get<std::string>();
             
-            // Extract assets
-            std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / 
-                ("pluma_assets_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
-            std::filesystem::create_directories(temp_dir);
-            
-            zip_int64_t num_entries = zip_get_num_entries(archive, 0);
+            // Replace assets
             for (zip_int64_t i = 0; i < num_entries; i++) {
                 const char* name = zip_get_name(archive, i, 0);
                 if (name && std::string(name).find("assets/") == 0) {
-                    zip_file_t* asset_zf = zip_fopen_index(archive, i, 0);
-                    if (asset_zf) {
-                        zip_stat_t asset_sb;
-                        zip_stat_index(archive, i, 0, &asset_sb);
-                        std::vector<char> asset_buf(asset_sb.size);
-                        zip_fread(asset_zf, asset_buf.data(), asset_sb.size);
-                        zip_fclose(asset_zf);
-                        
-                        std::filesystem::path asset_path = temp_dir / std::filesystem::path(name).filename();
-                        std::ofstream out(asset_path, std::ios::binary);
-                        out.write(asset_buf.data(), asset_buf.size());
-                        out.close();
-                        
-                        // Replace in text
-                        std::string to_replace = std::string("|IMAGE:") + "\\w+:" + name + "\\|";
-                        std::regex img_regex(R"(\|IMAGE:([^:]+):)" + std::string(name) + R"(\|)");
-                        doc_text = std::regex_replace(doc_text, img_regex, "|IMAGE:$1:" + asset_path.string() + "|");
-                    }
+                    std::filesystem::path asset_path = temp_dir / std::filesystem::path(name).filename();
+                    std::string to_replace = std::string("|IMAGE:") + "\\w+:" + name + "\\|";
+                    std::regex img_regex(R"(\|IMAGE:([^:]+):)" + std::string(name) + R"(\|)");
+                    doc_text = std::regex_replace(doc_text, img_regex, "|IMAGE:$1:" + asset_path.string() + "|");
                 }
             }
             
             editor.loadText(doc_text);
+            
+            if (region_obj.contains("styles") && region_obj["styles"].is_array()) {
+                for (const auto& style_obj : region_obj["styles"]) {
+                    uint32_t start = style_obj["start"];
+                    uint32_t length = style_obj["length"];
+                    PropertyId prop_id = static_cast<PropertyId>(style_obj["propertyId"].get<int>());
+                    PropertyValue prop_val = JsonToPropertyValue(prop_id, style_obj["value"]);
+                    
+                    editor.applyStyle(start, length, prop_id, prop_val);
+                }
+            }
+        };
+
+        // Load Main Document
+        if (doc.contains("text")) {
+            load_region(doc, DocumentRegion::Body); // For backwards compatibility doc itself is the region
         }
         
-        if (doc.contains("styles") && doc["styles"].is_array()) {
-            for (const auto& style_obj : doc["styles"]) {
-                uint32_t start = style_obj["start"];
-                uint32_t length = style_obj["length"];
-                PropertyId prop_id = static_cast<PropertyId>(style_obj["propertyId"].get<int>());
-                PropertyValue prop_val = JsonToPropertyValue(prop_id, style_obj["value"]);
-                
-                editor.applyStyle(start, length, prop_id, prop_val);
-            }
+        if (doc.contains("header")) {
+            load_region(doc["header"], DocumentRegion::Header);
         }
+        
+        if (doc.contains("footer")) {
+            load_region(doc["footer"], DocumentRegion::Footer);
+        }
+
+        // Restore active region to body
+        editor.setActiveRegion(DocumentRegion::Body);
+        
     } catch (...) {
         zip_close(archive);
         return false;

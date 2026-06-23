@@ -35,69 +35,72 @@ bool PlumaArchiveExporter::exportToFile(const std::string& filename, PlumaEditor
         return false;
     }
 
-    // 1. Build document.json
     json doc;
     doc["version"] = "1.0";
     
-    std::string text = editor.getText();
-    
-    // Parse images and add to zip
-    std::regex img_regex(R"(\|IMAGE:([^:]+):([^\|]+)\|)");
-    std::smatch match;
-    std::string modified_text = text;
     int img_counter = 0;
     
-    std::string search_text = text;
-    while (std::regex_search(search_text, match, img_regex)) {
-        std::string mode = match[1].str();
-        std::string original_path = match[2].str();
+    auto export_region = [&](const std::string& text, const FormatRegistry& format_registry) -> json {
+        json region;
+        std::regex img_regex(R"(\|IMAGE:([^:]+):([^\|]+)\|)");
+        std::smatch match;
+        std::string modified_text = text;
+        std::string search_text = text;
         
-        // Only pack if it's not already packed
-        if (original_path.find("assets/") != 0) {
-            std::filesystem::path path_obj(original_path);
-            std::string ext = path_obj.extension().string();
-            std::string asset_name = "assets/img_" + std::to_string(img_counter++) + ext;
+        while (std::regex_search(search_text, match, img_regex)) {
+            std::string mode = match[1].str();
+            std::string original_path = match[2].str();
             
-            // Add file to zip
-            zip_source_t* img_source = zip_source_file(archive, original_path.c_str(), 0, 0);
-            if (img_source) {
-                // Ensure assets directory exists in zip (implicit when adding file with path)
-                zip_file_add(archive, asset_name.c_str(), img_source, ZIP_FL_OVERWRITE);
+            if (original_path.find("assets/") != 0) {
+                std::filesystem::path path_obj(original_path);
+                std::string ext = path_obj.extension().string();
+                std::string asset_name = "assets/img_" + std::to_string(img_counter++) + ext;
                 
-                // Replace in text
-                std::string to_replace = "|IMAGE:" + mode + ":" + original_path + "|";
-                std::string replace_with = "|IMAGE:" + mode + ":" + asset_name + "|";
-                
-                size_t pos = modified_text.find(to_replace);
-                if (pos != std::string::npos) {
-                    modified_text.replace(pos, to_replace.length(), replace_with);
+                zip_source_t* img_source = zip_source_file(archive, original_path.c_str(), 0, 0);
+                if (img_source) {
+                    zip_file_add(archive, asset_name.c_str(), img_source, ZIP_FL_OVERWRITE);
+                    
+                    std::string to_replace = "|IMAGE:" + mode + ":" + original_path + "|";
+                    std::string replace_with = "|IMAGE:" + mode + ":" + asset_name + "|";
+                    
+                    size_t pos = modified_text.find(to_replace);
+                    if (pos != std::string::npos) {
+                        modified_text.replace(pos, to_replace.length(), replace_with);
+                    }
                 }
             }
+            search_text = match.suffix().str();
         }
         
-        search_text = match.suffix().str();
-    }
-    
-    doc["text"] = modified_text;
-    
-    json styles = json::array();
-    const auto& format_registry = editor.getFormatRegistry();
-    for (const auto& span : format_registry.getSpans()) {
-        const auto& bag = span.style;
-        for (const auto& [prop_id, prop_val] : bag.getAll()) {
-            json style_obj;
-            style_obj["start"] = span.start;
-            style_obj["length"] = span.length;
-            style_obj["propertyId"] = static_cast<int>(prop_id);
-            style_obj["value"] = std::visit(PropertyValueToJson{}, prop_val);
-            styles.push_back(style_obj);
+        region["text"] = modified_text;
+        
+        json styles = json::array();
+        for (const auto& span : format_registry.getSpans()) {
+            const auto& bag = span.style;
+            for (const auto& [prop_id, prop_val] : bag.getAll()) {
+                json style_obj;
+                style_obj["start"] = span.start;
+                style_obj["length"] = span.length;
+                style_obj["propertyId"] = static_cast<int>(prop_id);
+                style_obj["value"] = std::visit(PropertyValueToJson{}, prop_val);
+                styles.push_back(style_obj);
+            }
         }
-    }
-    doc["styles"] = styles;
+        region["styles"] = styles;
+        return region;
+    };
+    
+    // Main Document (for backwards compatibility we write it at root)
+    json main_region = export_region(editor.getText(), editor.getFormatRegistry());
+    doc["text"] = main_region["text"];
+    doc["styles"] = main_region["styles"];
+    
+    // Header and Footer
+    doc["header"] = export_region(editor.getHeaderText(), editor.getHeaderFormatRegistry());
+    doc["footer"] = export_region(editor.getFooterText(), editor.getFooterFormatRegistry());
 
     std::string content = doc.dump(2);
 
-    // 2. Add document.json to zip
     zip_source_t* source = zip_source_buffer(archive, content.c_str(), content.size(), 0);
     if (source == nullptr || zip_file_add(archive, "document.json", source, ZIP_FL_OVERWRITE | ZIP_FL_ENC_UTF_8) < 0) {
         if (source) zip_source_free(source);

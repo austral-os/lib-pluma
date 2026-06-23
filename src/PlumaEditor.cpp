@@ -2479,6 +2479,33 @@ void PlumaEditor::render(IRenderer& renderer) {
     // Draw the caret if it is visible and there is no active selection
     if (caret_visible_ && caret_blink_state_ && active_doc_->selection.isCollapsed()) {
         auto caret_rect_opt = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_);
+        
+        // Fallback for completely empty regions (e.g. newly activated header/footer)
+        if (!caret_rect_opt.has_value() && !current_pages_.empty()) {
+            size_t target_idx = active_page_index_.value_or(0);
+            if (target_idx < current_pages_.size()) {
+                const auto& page = current_pages_[target_idx];
+                Twips p_y(page_gap_);
+                for (size_t i = 0; i < target_idx; ++i) {
+                    p_y = p_y + current_pages_[i]->getBounds().height + page_gap_;
+                }
+                p_y = p_y + page->getBounds().y;
+
+                Twips caret_x = page_margins_.left;
+                Twips caret_y = p_y + page_margins_.top;
+                
+                if (active_region_ == DocumentRegion::Header) {
+                    caret_y = p_y + page_margins_.top;
+                } else if (active_region_ == DocumentRegion::Footer) {
+                    caret_y = p_y + page->getBounds().height - page_margins_.bottom - Twips(240); // Approx 1 line
+                } else {
+                    caret_y = p_y + page_margins_.top;
+                }
+                
+                caret_rect_opt = Rect{caret_x, caret_y, Twips(120), Twips(240)};
+            }
+        }
+
         if (caret_rect_opt.has_value()) {
             Rect caret = *caret_rect_opt;
             Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));

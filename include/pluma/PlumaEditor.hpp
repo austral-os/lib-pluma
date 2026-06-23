@@ -176,7 +176,9 @@ public:
      * @return A pair of {start_offset, length} if protected, std::nullopt otherwise.
      */
     std::optional<std::pair<uint32_t, uint32_t>> getProtectedTagBounds(uint32_t logical_offset) const;
-
+    uint32_t snapLeft(uint32_t offset) const;
+    uint32_t snapRight(uint32_t offset) const;
+    uint32_t snapNearest(uint32_t offset) const;
     /**
      * @brief Sets the background color of the page canvas.
      */

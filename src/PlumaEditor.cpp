@@ -80,19 +80,35 @@ std::optional<std::pair<uint32_t, uint32_t>> PlumaEditor::getProtectedTagBounds(
     return std::nullopt;
 }
 
+uint32_t PlumaEditor::snapLeft(uint32_t offset) const {
+    auto bounds = getProtectedTagBounds(offset);
+    if (bounds) {
+        return bounds->first;
+    }
+    return offset;
+}
+
+uint32_t PlumaEditor::snapRight(uint32_t offset) const {
+    auto bounds = getProtectedTagBounds(offset);
+    if (bounds) {
+        return bounds->first + bounds->second;
+    }
+    return offset;
+}
+
+uint32_t PlumaEditor::snapNearest(uint32_t offset) const {
+    auto bounds = getProtectedTagBounds(offset);
+    if (bounds) {
+        uint32_t tag_start = bounds->first;
+        uint32_t tag_end = tag_start + bounds->second;
+        return (offset - tag_start < tag_end - offset) ? tag_start : tag_end;
+    }
+    return offset;
+}
+
 void PlumaEditor::setSelection(uint32_t anchor, uint32_t head) {
-    auto snap = [this](uint32_t offset) {
-        auto bounds = getProtectedTagBounds(offset);
-        if (bounds) {
-            uint32_t tag_start = bounds->first;
-            uint32_t tag_end = tag_start + bounds->second;
-            return (offset - tag_start < tag_end - offset) ? tag_start : tag_end;
-        }
-        return offset;
-    };
-    
-    selection_.anchor = snap(anchor);
-    selection_.head = snap(head);
+    selection_.anchor = snapNearest(anchor);
+    selection_.head = snapNearest(head);
     table_selection_.mode = TableSelectionMode::None;
     selected_image_offset_ = std::nullopt;
     updateCursorState();
@@ -1130,6 +1146,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                        !CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
                     selection_.head--;
                 }
+                selection_.head = snapLeft(selection_.head);
                 if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                 updateCursorState();
             }
@@ -1142,6 +1159,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                        !CaretResolver::resolveLogicalToPhysical(current_pages_, selection_.head, page_gap_)) {
                     selection_.head++;
                 }
+                selection_.head = snapRight(selection_.head);
                 if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                 updateCursorState();
             }
@@ -1152,7 +1170,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 uint32_t pos = selection_.head;
                 while (pos > 0 && std::isspace(content[pos - 1])) pos--;
                 while (pos > 0 && !std::isspace(content[pos - 1])) pos--;
-                selection_.head = pos;
+                selection_.head = snapLeft(pos);
                 if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                 updateCursorState();
             }
@@ -1164,7 +1182,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 uint32_t len = document_.getLength();
                 while (pos < len && !std::isspace(content[pos])) pos++;
                 while (pos < len && std::isspace(content[pos])) pos++;
-                selection_.head = pos;
+                selection_.head = snapRight(pos);
                 if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                 updateCursorState();
             }
@@ -1175,7 +1193,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 Twips target_y = Twips(std::max(0, rect->y.getValue() - half_line.getValue()));
                 if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_)) {
                     if (*new_offset != selection_.head) {
-                        selection_.head = *new_offset;
+                        selection_.head = snapNearest(*new_offset);
                         if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                         updateCursorState();
                         break;
@@ -1226,7 +1244,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 Twips target_y = rect->y + rect->height + Twips(rect->height.getValue() / 2);
                 if (auto new_offset = CaretResolver::resolvePhysicalToLogical(current_pages_, rect->x, target_y, page_gap_)) {
                     if (*new_offset != selection_.head) {
-                        selection_.head = *new_offset;
+                        selection_.head = snapNearest(*new_offset);
                         if (!hasModifier(mods, ModifierFlags::Shift)) selection_.anchor = selection_.head;
                         updateCursorState();
                     }

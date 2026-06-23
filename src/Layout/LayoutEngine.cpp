@@ -37,7 +37,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     const FormatRegistry* footer_registry,
     const std::function<bool(int)>& has_header_cb,
     const std::function<bool(int)>& has_footer_cb,
-    uint32_t logical_offset_base
+    uint32_t logical_offset_base,
+    int override_page_number
 ) {
     std::vector<std::unique_ptr<PageBox>> pages;
     
@@ -51,7 +52,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         Twips header_h(0), footer_h(0);
         
         if (has_header_cb && has_header_cb(page_idx) && !header_text.empty() && header_registry) {
-            auto h_pages = layoutText(header_text, page_size, margins, *header_registry);
+            auto h_pages = layoutText(header_text, page_size, margins, *header_registry, "", nullptr, "", nullptr, nullptr, nullptr, 0, page_idx);
             if (!h_pages.empty()) {
                 page->header_blocks = std::move(h_pages[0]->blocks);
                 Twips h_y(margins.top);
@@ -64,7 +65,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         }
         
         if (has_footer_cb && has_footer_cb(page_idx) && !footer_text.empty() && footer_registry) {
-            auto f_pages = layoutText(footer_text, page_size, margins, *footer_registry);
+            auto f_pages = layoutText(footer_text, page_size, margins, *footer_registry, "", nullptr, "", nullptr, nullptr, nullptr, 0, page_idx);
             if (!f_pages.empty()) {
                 page->footer_blocks = std::move(f_pages[0]->blocks);
                 Twips f_y(page_size.height.getValue() - margins.bottom.getValue());
@@ -423,7 +424,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1));
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -466,7 +467,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
                         
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1));
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -522,7 +523,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
                         
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base);
+                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1));
                         if (!cell_pages.empty()) {
                             for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
                         }
@@ -961,7 +962,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     const char* user = std::getenv("USER");
                     display_text = user ? user : "User";
                 } else if (word == "|FIELD:PAGE|") {
-                    display_text = std::to_string(pages.size() + 1);
+                    display_text = std::to_string(override_page_number > 0 ? override_page_number : (pages.size() + 1));
                 }
             }
 

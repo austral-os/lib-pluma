@@ -51,7 +51,8 @@ public:
         const FormatRegistry* footer_registry = nullptr,
         const std::function<bool(int)>& has_header_cb = nullptr,
         const std::function<bool(int)>& has_footer_cb = nullptr,
-        uint32_t logical_offset_base = 0
+        uint32_t logical_offset_base = 0,
+        int override_page_number = -1
     );
 
 private:

@@ -116,6 +116,58 @@ Size PlumaEditor::getDocumentBounds() const {
     return {max_width, total_height};
 }
 
+std::optional<uint32_t> PlumaEditor::getBlankPageOffsetAtY(Twips y) const {
+    Twips current_y(page_gap_.getValue()); // starting gap
+    for (const auto& page : current_pages_) {
+        Twips ph = page->getBounds().height;
+        if (y.getValue() >= current_y.getValue() && y.getValue() <= current_y.getValue() + ph.getValue()) {
+            return page->blank_page_offset;
+        }
+        current_y = current_y + ph + page_gap_;
+    }
+    return std::nullopt;
+}
+
+void PlumaEditor::deleteBlankPage(uint32_t offset) {
+    std::string text = document_.getText();
+    if (offset < text.length() && text.length() - offset >= 11) {
+        std::string tag = text.substr(offset, 11);
+        if (tag == "|BLANKPAGE|") {
+            // Find how much to delete: usually \n|BLANKPAGE|\n
+            uint32_t del_start = offset;
+            uint32_t del_len = 11;
+            
+            // LayoutEngine increments offset by para.length() + 1
+            // In PlumaEditor deleteBackward, we delete the exact paragraph + 1 for newline.
+            if (del_start > 0 && text[del_start - 1] == '\n') {
+                del_start--;
+                del_len++;
+            }
+            if (del_start + del_len < text.length() && text[del_start + del_len] == '\n') {
+                del_len++;
+            }
+
+            undo_manager_.beginTransaction();
+            undo_manager_.addCommand(std::make_unique<DeleteTextCommand>(del_start, del_len));
+            format_registry_.deleteText(del_start, del_len);
+            undo_manager_.commitTransaction();
+            
+            // Adjust selection if it was past the deleted text
+            if (selection_.head > del_start) {
+                if (selection_.head >= del_start + del_len) {
+                    selection_.head -= del_len;
+                } else {
+                    selection_.head = del_start;
+                }
+            }
+            selection_.anchor = selection_.head;
+            
+            updateLayout();
+            updateCursorState();
+        }
+    }
+}
+
 void PlumaEditor::setPageGap(Twips gap) {
     page_gap_ = gap;
     updateLayout();

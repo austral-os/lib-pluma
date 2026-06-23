@@ -223,6 +223,9 @@ public:
      */
     Size getDocumentBounds() const;
 
+    std::optional<uint32_t> getBlankPageOffsetAtY(Twips y) const;
+    void deleteBlankPage(uint32_t offset);
+
     /**
      * @brief Sets the gap between pages.
      */

@@ -158,6 +158,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             pages.push_back(std::move(current_page));
             current_page = std::make_unique<PageBox>();
             current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});
+            current_page->blank_page_offset = logical_offset;
             pages.push_back(std::move(current_page));
             current_page = std::make_unique<PageBox>();
             current_page->setBounds({Twips(0), Twips(0), page_size.width, page_size.height});

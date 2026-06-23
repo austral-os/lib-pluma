@@ -3292,7 +3292,18 @@ uint32_t PlumaEditor::getCurrentPageNumber() const {
     uint32_t page_idx = y.getValue() / page_total_height.getValue();
     return page_idx + 1;
 }
+size_t PlumaEditor::getPageFromY(Twips y) const {
+    if (current_pages_.empty()) return 0;
+    Twips current_page_y(page_gap_);
+    for (size_t i = 0; i < current_pages_.size(); ++i) {
+        Twips page_bottom = current_page_y + current_pages_[i]->getBounds().height + page_gap_;
+        if (y.getValue() < page_bottom.getValue()) {
+            return i;
+        }
+        current_page_y = page_bottom;
+    }
+    return current_pages_.size() - 1;
+}
 
 } // namespace pluma
-
 

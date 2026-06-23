@@ -252,6 +252,9 @@ public:
     DocumentRegion getActiveRegion() const { return active_region_; }
     void setActiveRegion(DocumentRegion region);
 
+    void setActivePageIndex(std::optional<size_t> page_index) { active_page_index_ = page_index; }
+    size_t getPageFromY(Twips y) const;
+
     /**
      * @brief Gets the style for a specific page.
      */

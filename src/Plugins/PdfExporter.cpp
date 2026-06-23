@@ -43,6 +43,7 @@ bool PdfExporter::exportToFile(const std::string& filename, PlumaEditor& editor)
     editor.setPageGap(Twips(0));
     editor.hideMargins();
     editor.setCaretVisible(false);
+    editor.setPrinting(true);
     
     // 2. NOW set print colors — these must come AFTER any call that triggers updateLayout()
     //    because the PlumaView theme sync runs inside updateLayout's notification chain
@@ -80,6 +81,7 @@ bool PdfExporter::exportToFile(const std::string& filename, PlumaEditor& editor)
     editor.setPageGap(Twips(400));
     editor.showMargins();
     editor.setCaretVisible(true);
+    editor.setPrinting(false);
     editor.setScroll(Twips(0), Twips(0));
     editor.setViewport(Twips(794 * 15), Twips(1123 * 3 * 15));
 

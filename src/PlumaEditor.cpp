@@ -1900,8 +1900,15 @@ void PlumaEditor::render(IRenderer& renderer) {
                 
                 bool draw_top = true, draw_bottom = true, draw_left = true, draw_right = true;
                 if (table->hide_most_borders) {
-                    draw_top = draw_left = draw_right = false;
-                    draw_bottom = (row_idx == 0); // Only bottom border of the first row
+                    if (is_printing_) {
+                        draw_top = draw_left = draw_right = false;
+                        draw_bottom = (row_idx == 0); // Only bottom border of the first row
+                    } else {
+                        // Lighter color for edit mode!
+                        bcol = (0x33u << 24) | (r8 << 16) | (g8 << 8) | b8; // ~20% alpha
+                        draw_top = draw_left = draw_right = true;
+                        draw_bottom = true;
+                    }
                 }
 
                 if (draw_top) display_list.addCommand(std::make_unique<FillRectCommand>(Rect{cx, cy, cw, thick}, bcol));

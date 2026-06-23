@@ -216,6 +216,8 @@ public:
      * @brief Toggles the visibility of the blinking text cursor (caret).
      */
     void setCaretVisible(bool visible);
+    void setPrinting(bool printing) { is_printing_ = printing; }
+    bool isPrinting() const { return is_printing_; }
 
     /**
      * @brief Sets the visual style of the caret.
@@ -539,6 +541,7 @@ private:
     
     bool layout_suspended_{false};
     bool layout_pending_{false};
+    bool is_printing_{false};
     
     void updateCursorState();
 };

@@ -135,6 +135,16 @@ bool PlumaArchiveImporter::importFile(const std::string& filename, PlumaEditor& 
             load_region(doc["footer"], DocumentRegion::Footer);
         }
 
+        if (doc.contains("ignored_words") && doc["ignored_words"].is_array()) {
+            std::vector<std::string> ignored_words;
+            for (const auto& w : doc["ignored_words"]) {
+                if (w.is_string()) {
+                    ignored_words.push_back(w.get<std::string>());
+                }
+            }
+            editor.setIgnoredWords(ignored_words);
+        }
+
         // Restore active region to body
         editor.setActiveRegion(DocumentRegion::Body);
         

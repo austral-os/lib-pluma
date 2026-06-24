@@ -99,6 +99,8 @@ bool PlumaArchiveExporter::exportToFile(const std::string& filename, PlumaEditor
     doc["header"] = export_region(editor.getHeaderText(), editor.getHeaderFormatRegistry());
     doc["footer"] = export_region(editor.getFooterText(), editor.getFooterFormatRegistry());
 
+    doc["ignored_words"] = editor.getIgnoredWords();
+
     std::string content = doc.dump(2);
 
     zip_source_t* source = zip_source_buffer(archive, content.c_str(), content.size(), 0);

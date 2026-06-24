@@ -490,6 +490,14 @@ public:
      */
     bool isDragging() const { return is_dragging_; }
     
+    void addIgnoredWord(const std::string& word) {
+        if (std::find(ignored_words_.begin(), ignored_words_.end(), word) == ignored_words_.end()) {
+            ignored_words_.push_back(word);
+        }
+    }
+    const std::vector<std::string>& getIgnoredWords() const { return ignored_words_; }
+    void setIgnoredWords(const std::vector<std::string>& words) { ignored_words_ = words; }
+    
     /**
      * @brief Returns a formatted string with profiling data from the internal Profiler.
      * Useful for diagnosing performance bottlenecks in layout and rendering.
@@ -580,6 +588,7 @@ private:
     
     // Calidad de render durante drag: usa CAIRO_FILTER_FAST mientras se arrastra
     bool is_dragging_{false};
+    std::vector<std::string> ignored_words_;
     
     void updateCursorState();
 };

@@ -2,6 +2,7 @@
 
 #include <pluma/PlumaEditor.hpp>
 #include <pluma/Typography/DummyTypography.hpp>
+#include <pluma/Diagnostics/Profiler.hpp>
 
 namespace pluma {
 
@@ -16,6 +17,14 @@ PlumaEditor::PlumaEditor(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IF
     });
 
     updateLayout();
+}
+
+std::string PlumaEditor::getProfilerReport() const {
+    return diagnostics::Profiler::getInstance().getReport();
+}
+
+void PlumaEditor::clearProfilerData() {
+    diagnostics::Profiler::getInstance().clear();
 }
 
 void PlumaEditor::setActiveRegion(DocumentRegion region) {
@@ -444,6 +453,10 @@ std::tuple<TableBox*, int, int> PlumaEditor::findTableCellAt(Twips absolute_x, T
 bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFlags mods) {
     if (button != MouseButton::Left) return false;
 
+    is_dragging_ = true;
+    // Resetear el timestamp de throttle para que el primer move sea inmediato
+    last_drag_layout_time_ = std::chrono::steady_clock::time_point{};
+
     // Convert pixels to Twips (assuming standard 15 twips per pixel) and add scroll offset
     Twips absolute_x = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
     Twips absolute_y = Twips(static_cast<int32_t>(y * 15.0)) + viewport_y_;
@@ -606,6 +619,10 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
 bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlags mods) {
     (void)x; (void)y; (void)mods;
     if (button == MouseButton::Left) {
+        is_dragging_ = false;
+        // Forzar un relayout final para sincronizar el estado después del throttling
+        updateLayout();
+
         if (drag_mode_ == DragMode::ImageMove && selected_image_offset_.has_value()) {
             uint32_t src_offset = *selected_image_offset_;
             uint32_t dest_offset = active_doc_->selection.head;
@@ -783,6 +800,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
 }
 
 bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
+    PLUMA_PROFILE_SCOPE("PlumaEditor::onMouseMove");
     if (drag_mode_ == DragMode::None) return false;
 
     Twips absolute_x = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
@@ -790,6 +808,16 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
 
     Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
     absolute_x = absolute_x - page_x;
+
+    // Throttle helper: durante drag, limita los relayouts a ~30fps para evitar bloquear el hilo UI
+    auto throttled_layout = [this]() {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_drag_layout_time_).count();
+        if (elapsed_ms >= kDragLayoutThrottleMs) {
+            last_drag_layout_time_ = now;
+            updateLayout();
+        }
+    };
 
     if (drag_mode_ == DragMode::ImageResize && selected_image_offset_.has_value()) {
         Twips dx = absolute_x - drag_start_x_;
@@ -814,7 +842,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
         active_doc_->format_registry.applyStyle(*selected_image_offset_, 1, PropertyId::ImageWidth, w_pt);
         active_doc_->format_registry.applyStyle(*selected_image_offset_, 1, PropertyId::ImageHeight, h_pt);
         
-        updateLayout();
+        throttled_layout();
         return true;
     }
     
@@ -909,7 +937,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             }
         }
 
-        updateLayout();
+        throttled_layout();
         return true;
     }
 
@@ -951,7 +979,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableRowHeights, new_heights);
         }
 
-        updateLayout();
+        throttled_layout();
         return true;
     }
 
@@ -985,7 +1013,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                     float new_image_y_pt = new_img_y.getValue() / 15.0f;
                     active_doc_->format_registry.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
                     active_doc_->format_registry.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
-                    updateLayout();
+                    throttled_layout();
                     return true;
                 }
             }
@@ -1750,6 +1778,7 @@ void PlumaEditor::deleteSelectedImage() {
 }
 
 void PlumaEditor::updateLayout() {
+    PLUMA_PROFILE_SCOPE("PlumaEditor::updateLayout");
     if (layout_suspended_) {
         layout_pending_ = true;
         return;

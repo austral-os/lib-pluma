@@ -28,8 +28,16 @@ public:
     void pushClip(const Rect& rect) override;
     void popClip() override;
 
+    /**
+     * @brief Activa o desactiva el modo de calidad borrador.
+     * En modo borrador se usa CAIRO_FILTER_FAST para el escalado de imágenes,
+     * lo cual es mucho más rápido durante operaciones de drag.
+     */
+    void setDraftQuality(bool draft) { draft_quality_ = draft; }
+
 private:
     cairo_t* cr_;
+    bool draft_quality_{false}; ///< Si es true, usa filtro rápido para imágenes durante drag
 
     /**
      * @brief Converts twips to standard user-space pixels.

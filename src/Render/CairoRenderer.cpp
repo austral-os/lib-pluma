@@ -6,6 +6,7 @@
 #include "stb_image.h"
 
 #include <pluma/Render/CairoRenderer.hpp>
+#include <pluma/Diagnostics/Profiler.hpp>
 
 namespace pluma {
 
@@ -112,6 +113,7 @@ static std::unordered_map<std::string, cairo_surface_t*> g_image_cache;
 static std::mutex g_cache_mutex;
 
 void CairoRenderer::drawImage(const Rect& rect, const std::string& path) {
+    PLUMA_PROFILE_SCOPE("CairoRenderer::drawImage");
     cairo_save(cr_);
     double x = twipsToPixels(rect.x);
     double y = twipsToPixels(rect.y);
@@ -174,6 +176,12 @@ void CairoRenderer::drawImage(const Rect& rect, const std::string& path) {
         cairo_scale(cr_, w / (double)img_w, h / (double)img_h);
         
         cairo_set_source_surface(cr_, image, 0, 0);
+        
+        // Durante drag: usar filtro rápido para mejorar el rendimiento de render.
+        // En calidad normal: usar CAIRO_FILTER_GOOD para suavizado apropiado.
+        cairo_pattern_t* pat = cairo_get_source(cr_);
+        cairo_pattern_set_filter(pat, draft_quality_ ? CAIRO_FILTER_FAST : CAIRO_FILTER_GOOD);
+        
         cairo_paint(cr_);
     } else {
         // Fallback placeholder if image fails to load

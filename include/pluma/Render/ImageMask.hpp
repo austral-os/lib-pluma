@@ -36,7 +36,7 @@ public:
     
     // Finds the next transparent gap for a rect of size (w, h) starting at (x, y).
     // Checks the vertical range [y, y+h-1].
-    // Returns the new x position. If no gap fits, could return -1 or max_w.
+    // Returns the new x position. If no gap fits within the image width, returns width_.
     int findGap(int y1, int y2, int x, int w) const {
         int start_y = std::max(0, y1);
         int end_y = std::min(height_ - 1, y2);
@@ -45,6 +45,10 @@ public:
         bool fits = false;
         
         while (!fits) {
+            // Early exit: si ya superamos el ancho de la imagen, no hay gap disponible
+            if (current_x >= width_) {
+                return width_;
+            }
             fits = true;
             for (int y = start_y; y <= end_y; ++y) {
                 for (const auto& seg : rows_[y]) {

@@ -3,6 +3,7 @@
 #include <ctime>
 
 #include <pluma/Layout/LayoutEngine.hpp>
+#include <pluma/Diagnostics/Profiler.hpp>
 #include <sstream>
 #include <string>
 #include <pluma/Typography/DummyTypography.hpp>
@@ -43,6 +44,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     bool force_footer_space,
     int total_pages
 ) {
+    PLUMA_PROFILE_SCOPE("LayoutEngine::layoutText");
     std::vector<std::unique_ptr<PageBox>> pages;
     
 
@@ -187,6 +189,11 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             column_start_y = current_page_y;
             max_page_y = current_page_y;
             current_column = 0;
+            // Las imágenes flotantes y sus masks son locales a la página.
+            // Al cambiar de página se deben limpiar para evitar que afecten el layout de las páginas siguientes.
+            active_masks.clear();
+            float_right_w = Twips(0); float_right_top = Twips(0); float_right_bottom = Twips(0);
+            float_left_w  = Twips(0); float_left_top  = Twips(0); float_left_bottom  = Twips(0);
             logical_offset += para.length() + 1;
             continue;
         }
@@ -200,6 +207,10 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             column_start_y = current_page_y;
             max_page_y = current_page_y;
             current_column = 0;
+            // Limpiar estado de imágenes flotantes al cambiar de página
+            active_masks.clear();
+            float_right_w = Twips(0); float_right_top = Twips(0); float_right_bottom = Twips(0);
+            float_left_w  = Twips(0); float_left_top  = Twips(0); float_left_bottom  = Twips(0);
             logical_offset += para.length() + 1;
             continue;
         }
@@ -1004,6 +1015,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             Twips word_width = run.total_width;
 
             auto push_past_masks = [&](Twips& word_x, Twips y_top, Twips word_w, Twips word_h) {
+                PLUMA_PROFILE_SCOPE("push_past_masks");
                 bool moved = true;
                 while (moved) {
                     moved = false;
@@ -1237,9 +1249,15 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     } else {
                         pages.push_back(std::move(current_page));
                         setup_page(current_page, pages.size() + 1, current_page_y, content_height);
-            column_start_y = current_page_y;
-            max_page_y = current_page_y;
+                        column_start_y = current_page_y;
+                        max_page_y = current_page_y;
                         current_column = 0;
+                        // Bug fix: limpiar máscaras de imagen y floats al avanzar a la página siguiente.
+                        // Sin esto, una imagen en modo Tight en pág N afecta el wrap de texto
+                        // en pág N+1 porque las coordenadas absolutas se reinician al mismo valor.
+                        active_masks.clear();
+                        float_right_w = Twips(0); float_right_top = Twips(0); float_right_bottom = Twips(0);
+                        float_left_w  = Twips(0); float_left_top  = Twips(0); float_left_bottom  = Twips(0);
                     }
                     continue; // Retry fitting on the clean page/column
                 } else {

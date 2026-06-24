@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <chrono>
 
 #include <pluma/CoreTypes.hpp>
 #include <pluma/PieceTable.hpp>
@@ -482,6 +483,23 @@ public:
     void redo();
     
     void updateLayout();
+    
+    /**
+     * @brief Returns true while the user is actively dragging (image, table column/row).
+     * Used by the renderer to activate draft quality mode during drag operations.
+     */
+    bool isDragging() const { return is_dragging_; }
+    
+    /**
+     * @brief Returns a formatted string with profiling data from the internal Profiler.
+     * Useful for diagnosing performance bottlenecks in layout and rendering.
+     */
+    std::string getProfilerReport() const;
+    
+    /**
+     * @brief Clears all accumulated profiling data.
+     */
+    void clearProfilerData();
 
 private:
     void onEditorAction(EditorAction action, const std::string& text, ModifierFlags mods);
@@ -554,6 +572,14 @@ private:
     bool layout_suspended_{false};
     bool layout_pending_{false};
     bool is_printing_{false};
+    
+    // Throttle de layout durante drag: evita relayout en cada pixel del mouse
+    // Permite máximo ~30fps de actualizaciones de layout durante operaciones de drag.
+    std::chrono::steady_clock::time_point last_drag_layout_time_{};
+    static constexpr int kDragLayoutThrottleMs = 32; // ~30fps
+    
+    // Calidad de render durante drag: usa CAIRO_FILTER_FAST mientras se arrastra
+    bool is_dragging_{false};
     
     void updateCursorState();
 };

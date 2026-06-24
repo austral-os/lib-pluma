@@ -5,6 +5,7 @@
 #include <memory>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <nuspell/dictionary.hxx>
 #include <mutex>
@@ -47,6 +48,12 @@ public:
     bool hasLanguage(const std::string& langCode) const;
 
     /**
+     * @brief Ignore a word so that it's no longer marked as misspelled.
+     * @param word The word to ignore.
+     */
+    void ignoreWord(const std::string& word);
+
+    /**
      * @brief Register the paths for a dictionary without loading it.
      */
     void registerDictionary(const std::string& langCode, const std::string& affPath, const std::string& dicPath);
@@ -59,6 +66,7 @@ public:
 private:
     std::unordered_map<std::string, std::unique_ptr<nuspell::Dictionary>> dictionaries_;
     std::unordered_map<std::string, std::pair<std::string, std::string>> pending_dictionaries_;
+    std::unordered_set<std::string> ignored_words_;
     mutable std::mutex mutex_;
 };
 

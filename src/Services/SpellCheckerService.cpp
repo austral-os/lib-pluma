@@ -44,11 +44,19 @@ bool SpellCheckerService::ensureDictionaryLoaded(const std::string& langCode) {
     return false;
 }
 
+void SpellCheckerService::ignoreWord(const std::string& word) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ignored_words_.insert(word);
+}
+
 bool SpellCheckerService::checkWord(std::string_view word, const std::string& langCode) const {
     std::lock_guard<std::mutex> lock(mutex_);
+    std::string w(word);
+    if (ignored_words_.find(w) != ignored_words_.end()) {
+        return true;
+    }
     auto it = dictionaries_.find(langCode);
     if (it != dictionaries_.end()) {
-        std::string w(word);
         return it->second->spell(w);
     }
     // If language is not loaded, we consider it "correct" to not show false positives

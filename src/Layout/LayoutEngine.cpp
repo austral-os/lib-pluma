@@ -232,11 +232,13 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
 
         Twips spacing_before(0);
         if (auto sb = para_style.get(PropertyId::ParagraphSpacingBefore)) {
-            spacing_before = Twips(std::get<float>(*sb) * 20.0f);
+            // Convert from Centimeters to Twips (1 cm = 1440 / 2.54 = 566.92913 twips)
+            spacing_before = Twips(std::get<float>(*sb) * 566.92913f);
         }
         Twips spacing_after(0);
         if (auto sa = para_style.get(PropertyId::ParagraphSpacingAfter)) {
-            spacing_after = Twips(std::get<float>(*sa) * 20.0f);
+            // Convert from Centimeters to Twips
+            spacing_after = Twips(std::get<float>(*sa) * 566.92913f);
         }
 
         size_t start = 0;

@@ -43,14 +43,25 @@ bool PlumaArchiveExporter::exportToFile(const std::string& filename, PlumaEditor
     auto export_region = [&](const std::string& text, const FormatRegistry& format_registry) -> json {
         json region;
         std::regex img_regex(R"(\|IMAGE:([^:]+):([^\|]+)\|)");
-        std::smatch match;
-        std::string modified_text = text;
-        std::string search_text = text;
         
-        while (std::regex_search(search_text, match, img_regex)) {
+        std::string modified_text = "";
+        size_t last_pos = 0;
+        
+        struct Shift { size_t orig_pos; int diff; };
+        std::vector<Shift> shifts;
+        int current_diff = 0;
+
+        auto next = std::sregex_iterator(text.begin(), text.end(), img_regex);
+        auto end = std::sregex_iterator();
+
+        while (next != end) {
+            std::smatch match = *next;
             std::string mode = match[1].str();
             std::string original_path = match[2].str();
             
+            modified_text += text.substr(last_pos, match.position() - last_pos);
+            
+            std::string replacement = match.str();
             if (original_path.find("assets/") != 0) {
                 std::filesystem::path path_obj(original_path);
                 std::string ext = path_obj.extension().string();
@@ -59,28 +70,43 @@ bool PlumaArchiveExporter::exportToFile(const std::string& filename, PlumaEditor
                 zip_source_t* img_source = zip_source_file(archive, original_path.c_str(), 0, 0);
                 if (img_source) {
                     zip_file_add(archive, asset_name.c_str(), img_source, ZIP_FL_OVERWRITE);
-                    
-                    std::string to_replace = "|IMAGE:" + mode + ":" + original_path + "|";
-                    std::string replace_with = "|IMAGE:" + mode + ":" + asset_name + "|";
-                    
-                    size_t pos = modified_text.find(to_replace);
-                    if (pos != std::string::npos) {
-                        modified_text.replace(pos, to_replace.length(), replace_with);
-                    }
+                    replacement = "|IMAGE:" + mode + ":" + asset_name + "|";
                 }
             }
-            search_text = match.suffix().str();
+            
+            modified_text += replacement;
+            
+            int diff = static_cast<int>(replacement.length()) - static_cast<int>(match.length());
+            if (diff != 0) {
+                current_diff += diff;
+                shifts.push_back({static_cast<size_t>(match.position() + match.length()), current_diff});
+            }
+            
+            last_pos = match.position() + match.length();
+            next++;
         }
+        modified_text += text.substr(last_pos);
         
         region["text"] = modified_text;
+        
+        auto get_new_pos = [&](size_t orig_pos) -> size_t {
+            int total_diff = 0;
+            for (const auto& shift : shifts) {
+                if (orig_pos >= shift.orig_pos) total_diff = shift.diff;
+                else break;
+            }
+            return orig_pos + total_diff;
+        };
         
         json styles = json::array();
         for (const auto& span : format_registry.getSpans()) {
             const auto& bag = span.style;
             for (const auto& [prop_id, prop_val] : bag.getAll()) {
                 json style_obj;
-                style_obj["start"] = span.start;
-                style_obj["length"] = span.length;
+                size_t new_start = get_new_pos(span.start);
+                size_t new_end = get_new_pos(span.start + span.length);
+                style_obj["start"] = new_start;
+                style_obj["length"] = new_end > new_start ? new_end - new_start : 0;
                 style_obj["propertyId"] = static_cast<int>(prop_id);
                 style_obj["value"] = std::visit(PropertyValueToJson{}, prop_val);
                 styles.push_back(style_obj);

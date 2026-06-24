@@ -97,27 +97,66 @@ bool PlumaArchiveImporter::importFile(const std::string& filename, PlumaEditor& 
             editor.setActiveRegion(region_enum);
             std::string doc_text = region_obj["text"].get<std::string>();
             
-            // Replace assets
-            for (zip_int64_t i = 0; i < num_entries; i++) {
-                const char* name = zip_get_name(archive, i, 0);
-                if (name && std::string(name).find("assets/") == 0) {
-                    std::filesystem::path asset_path = temp_dir / std::filesystem::path(name).filename();
-                    std::string to_replace = std::string("|IMAGE:") + "\\w+:" + name + "\\|";
-                    std::regex img_regex(R"(\|IMAGE:([^:]+):)" + std::string(name) + R"(\|)");
-                    doc_text = std::regex_replace(doc_text, img_regex, "|IMAGE:$1:" + asset_path.string() + "|");
-                }
-            }
+            std::string modified_text = "";
+            size_t last_pos = 0;
             
-            editor.loadText(doc_text);
+            struct Shift { size_t orig_pos; int diff; };
+            std::vector<Shift> shifts;
+            int current_diff = 0;
+
+            std::regex img_regex(R"(\|IMAGE:([^:]+):([^\|]+)\|)");
+            auto next = std::sregex_iterator(doc_text.begin(), doc_text.end(), img_regex);
+            auto end = std::sregex_iterator();
+
+            while (next != end) {
+                std::smatch match = *next;
+                std::string mode = match[1].str();
+                std::string name = match[2].str();
+                
+                modified_text += doc_text.substr(last_pos, match.position() - last_pos);
+                std::string replacement = match.str();
+                
+                if (name.find("assets/") == 0) {
+                    std::filesystem::path asset_path = temp_dir / std::filesystem::path(name).filename();
+                    replacement = "|IMAGE:" + mode + ":" + asset_path.string() + "|";
+                }
+                
+                modified_text += replacement;
+                
+                int diff = static_cast<int>(replacement.length()) - static_cast<int>(match.length());
+                if (diff != 0) {
+                    current_diff += diff;
+                    shifts.push_back({static_cast<size_t>(match.position() + match.length()), current_diff});
+                }
+                
+                last_pos = match.position() + match.length();
+                next++;
+            }
+            modified_text += doc_text.substr(last_pos);
+            
+            editor.loadText(modified_text);
+            
+            auto get_new_pos = [&](size_t orig_pos) -> size_t {
+                int total_diff = 0;
+                for (const auto& shift : shifts) {
+                    if (orig_pos >= shift.orig_pos) total_diff = shift.diff;
+                    else break;
+                }
+                return orig_pos + total_diff;
+            };
             
             if (region_obj.contains("styles") && region_obj["styles"].is_array()) {
                 for (const auto& style_obj : region_obj["styles"]) {
                     uint32_t start = style_obj["start"];
                     uint32_t length = style_obj["length"];
+                    
+                    size_t new_start = get_new_pos(start);
+                    size_t new_end = get_new_pos(start + length);
+                    
                     PropertyId prop_id = static_cast<PropertyId>(style_obj["propertyId"].get<int>());
                     PropertyValue prop_val = JsonToPropertyValue(prop_id, style_obj["value"]);
                     
-                    editor.applyStyle(start, length, prop_id, prop_val);
+                    editor.applyStyle(new_start, new_end > new_start ? new_end - new_start : 0, prop_id, prop_val);
                 }
             }
         };

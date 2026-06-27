@@ -32,6 +32,7 @@ PropertyValue JsonToPropertyValue(PropertyId id, const json& val) {
         }
         if (id == PropertyId::TextAlignment) return static_cast<TextAlign>(val.get<int>());
         if (id == PropertyId::VerticalAlignment) return static_cast<VerticalAlign>(val.get<int>());
+        if (id == PropertyId::CellVerticalAlignment) return static_cast<CellVerticalAlign>(val.get<int>());
         if (id == PropertyId::Decoration) return static_cast<TextDecoration>(val.get<int>());
         if (id == PropertyId::ImageWrapMode) return static_cast<TextWrapMode>(val.get<int>());
         if (id == PropertyId::DropCapLines) return val.get<int>();

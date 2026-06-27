@@ -612,6 +612,31 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (size_t i = r; i < end_r; ++i) span_h = span_h + row_heights[i];
                         
                         cell->setBounds({current_x, Twips(0), cell->getBounds().width, span_h});
+                        
+                        // Apply vertical alignment to contents
+                        CellVerticalAlign v_align = CellVerticalAlign::Top;
+                        if (auto val = registry.getStyleAt(cell->logical_offset).get(PropertyId::CellVerticalAlignment)) {
+                            v_align = std::get<CellVerticalAlign>(*val);
+                        }
+                        
+                        if (v_align != CellVerticalAlign::Top && !cell->blocks.empty()) {
+                            auto& last_cb = cell->blocks.back();
+                            Twips content_h = last_cb->getBounds().y + last_cb->getBounds().height;
+                            Twips empty_space = Twips(span_h.getValue() - content_h.getValue() - 60);
+                            if (empty_space.getValue() > 0) {
+                                Twips offset(0);
+                                if (v_align == CellVerticalAlign::Middle) {
+                                    offset = Twips(empty_space.getValue() / 2);
+                                } else if (v_align == CellVerticalAlign::Bottom) {
+                                    offset = empty_space;
+                                }
+                                for (auto& cb : cell->blocks) {
+                                    auto b = cb->getBounds();
+                                    b.y = b.y + offset;
+                                    cb->setBounds(b);
+                                }
+                            }
+                        }
                     }
                     row->setBounds({Twips(0), table_height, content_width, row_heights[r]});
                     table_height = table_height + row_heights[r];

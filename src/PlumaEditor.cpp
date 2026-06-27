@@ -273,7 +273,7 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
         active_doc_->undo_manager.beginTransaction();
     }
 
-    bool is_table_prop = (id >= PropertyId::TableWidth && id <= PropertyId::BorderLeftStyle);
+    bool is_table_prop = (id >= PropertyId::TableWidth && id <= PropertyId::BorderLeftStyle) || id == PropertyId::CellVerticalAlignment;
 
     if (table_selection_.mode != TableSelectionMode::None || (active_table_offset_.has_value() && is_table_prop)) {
         std::string doc_text = active_doc_->document.getText();

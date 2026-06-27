@@ -19,6 +19,7 @@ struct PropertyValueToJson {
     json operator()(Color v) const { return v; }
     json operator()(TextAlign v) const { return static_cast<int>(v); }
     json operator()(VerticalAlign v) const { return static_cast<int>(v); }
+    json operator()(CellVerticalAlign v) const { return static_cast<int>(v); }
     json operator()(TextDecoration v) const { return static_cast<int>(v); }
     json operator()(TextWrapMode v) const { return static_cast<int>(v); }
     json operator()(int v) const { return v; }

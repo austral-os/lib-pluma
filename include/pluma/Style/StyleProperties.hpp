@@ -23,6 +23,12 @@ enum class VerticalAlign {
     Superscript
 };
 
+enum class CellVerticalAlign {
+    Top,
+    Middle,
+    Bottom
+};
+
 enum class TextDecoration {
     None,
     Underline,
@@ -90,7 +96,8 @@ enum class PropertyId {
     ImageX,
     ImageY,
     Language,
-    SpellCheckEnabled
+    SpellCheckEnabled,
+    CellVerticalAlignment
 };
 
 using Color = uint32_t; ///< Format: ARGB
@@ -109,7 +116,8 @@ using PropertyValue = std::variant<
     VerticalAlign,  // VerticalAlignment
     TextDecoration, // Decoration
     TextWrapMode,   // ImageWrapMode
-    int             // DropCapLines
+    int,            // DropCapLines
+    CellVerticalAlign // CellVerticalAlignment
 >;
 
 /**
@@ -131,6 +139,7 @@ inline bool inheritsByDefault(PropertyId id) {
         case PropertyId::ParagraphIndentLeft:
         case PropertyId::ParagraphIndentRight:
         case PropertyId::ParagraphIndentFirstLine:
+        case PropertyId::CellVerticalAlignment:
         case PropertyId::Language:
         case PropertyId::SpellCheckEnabled:
             return true;

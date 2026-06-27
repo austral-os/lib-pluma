@@ -1979,6 +1979,18 @@ void PlumaEditor::render(IRenderer& renderer) {
                 if (auto l = style.get(pluma::PropertyId::BorderBottomColor)) bottom_color = std::get<Color>(*l);
                 if (auto l = style.get(pluma::PropertyId::BorderLeftColor)) left_color = std::get<Color>(*l);
                 if (auto l = style.get(pluma::PropertyId::BorderRightColor)) right_color = std::get<Color>(*l);
+                
+                auto apply_theme = [&](Color c) -> Color {
+                    if (c == 0xFF000000 && !is_printing_) {
+                        return default_text_color_;
+                    }
+                    return c;
+                };
+
+                top_color = apply_theme(top_color);
+                bottom_color = apply_theme(bottom_color);
+                left_color = apply_theme(left_color);
+                right_color = apply_theme(right_color);
 
                 if (auto l = style.get(pluma::PropertyId::BorderTopStyle)) top_style = std::get<int>(*l);
                 if (auto l = style.get(pluma::PropertyId::BorderBottomStyle)) bottom_style = std::get<int>(*l);

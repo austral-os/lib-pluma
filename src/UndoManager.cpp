@@ -8,12 +8,15 @@ UndoManager::UndoManager(PieceTable& table, FormatRegistry& registry)
 }
 
 void UndoManager::beginTransaction() {
-    if (current_transaction_) {
-        throw std::logic_error("Transaction already in progress");
+    if (transaction_depth_ == 0) {
+        if (current_transaction_) {
+            throw std::logic_error("Transaction already in progress");
+        }
+        current_transaction_ = std::make_unique<Transaction>();
+        snapshot_before_transaction_ = table_.createSnapshot();
+        snapshot_before_format_ = { registry_.getSpans() };
     }
-    current_transaction_ = std::make_unique<Transaction>();
-    snapshot_before_transaction_ = table_.createSnapshot();
-    snapshot_before_format_ = { registry_.getSpans() };
+    transaction_depth_++;
 }
 
 void UndoManager::addCommand(std::unique_ptr<Command> cmd) {
@@ -25,9 +28,12 @@ void UndoManager::addCommand(std::unique_ptr<Command> cmd) {
 }
 
 void UndoManager::commitTransaction() {
-    if (!current_transaction_) {
+    if (transaction_depth_ <= 0 || !current_transaction_) {
         throw std::logic_error("No transaction in progress");
     }
+
+    transaction_depth_--;
+    if (transaction_depth_ > 0) return;
 
     // If we are not at the end of the history (i.e. we have undone some actions),
     // a new commit truncates the redo history.
@@ -53,9 +59,11 @@ void UndoManager::commitTransaction() {
 }
 
 void UndoManager::rollbackTransaction() {
-    if (!current_transaction_) {
+    if (transaction_depth_ <= 0 || !current_transaction_) {
         throw std::logic_error("No transaction in progress");
     }
+    transaction_depth_--;
+    if (transaction_depth_ > 0) return;
     table_.restoreSnapshot(snapshot_before_transaction_);
     registry_.setSpans(snapshot_before_format_.spans);
     current_transaction_.reset();

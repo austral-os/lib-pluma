@@ -92,6 +92,7 @@ private:
     std::unique_ptr<Transaction> current_transaction_;
     std::shared_ptr<DocumentSnapshot> snapshot_before_transaction_;
     FormatSnapshot snapshot_before_format_;
+    int transaction_depth_ = 0;
 };
 
 } // namespace pluma

@@ -264,6 +264,14 @@ void PlumaEditor::setPageGap(Twips gap) {
     updateLayout();
 }
 
+void PlumaEditor::beginUndoTransaction() {
+    active_doc_->undo_manager.beginTransaction();
+}
+
+void PlumaEditor::commitUndoTransaction() {
+    active_doc_->undo_manager.commitTransaction();
+}
+
 void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, PropertyValue value) {
     bool is_spelling = (id == PropertyId::Decoration && 
                         std::holds_alternative<TextDecoration>(value) && 

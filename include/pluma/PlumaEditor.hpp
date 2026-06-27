@@ -295,6 +295,16 @@ public:
     void clearDecorationGlobally(TextDecoration dec);
 
     /**
+     * @brief Begins a logical undo transaction to group multiple edits.
+     */
+    void beginUndoTransaction();
+
+    /**
+     * @brief Commits the current logical undo transaction.
+     */
+    void commitUndoTransaction();
+
+    /**
      * @brief Suspends automatic layout updates when applying multiple styles.
      */
     void suspendLayout();

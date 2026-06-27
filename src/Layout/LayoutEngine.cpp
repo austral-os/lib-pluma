@@ -1243,8 +1243,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             
             for (size_t i = line_index; i < block->lines.size(); ++i) {
                 Twips lh = block->lines[i]->getBounds().height;
-                // Bound check against the content height limit (page height - bottom margin)
-                if ((test_y + lh).getValue() > (page_size.height.getValue() - margins.bottom.getValue())) break;
+                // Bound check against the content height limit (page height - bottom margin - footer)
+                if ((test_y + lh).getValue() > (column_start_y.getValue() + content_height.getValue())) break;
                 test_y = test_y + lh;
                 fit_count++;
             }

@@ -1453,7 +1453,7 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
 
         bool cursor_in_marker = (isTableMarker(current_para) || isPageMarker(current_para)) && start >= para_start && start < next_nl;
         if (cursor_in_marker) {
-            if (start == para_start && current_para.length() >= 5 && current_para.substr(0, 5) == "|TBL:") {
+            if (start == para_start && isTableMarker(current_para)) {
                 text_to_insert = text + "\n";
                 cursor_at_tbl_start = true;
             } else if (isPageMarker(current_para)) {

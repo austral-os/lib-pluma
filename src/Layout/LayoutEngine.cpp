@@ -420,6 +420,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 for (int i = 0; i < missing; ++i) table_col_widths.push_back(per_missing);
             }
             
+            current_table->col_widths = table_col_widths;
+            
             active_rowspans.assign(table_cols, 0);
             
             col_idx = 0;

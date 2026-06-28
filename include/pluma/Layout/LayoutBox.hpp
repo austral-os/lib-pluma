@@ -163,6 +163,7 @@ public:
     BoxType getType() const override { return BoxType::Table; }
 
     std::vector<std::unique_ptr<TableRowBox>> rows; ///< Rows within this table
+    std::vector<Twips> col_widths;                  ///< Computed logical column widths
     bool hide_most_borders = false;                 ///< Demo flag to hide borders
     uint32_t logical_offset{0};
 };

@@ -517,7 +517,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                 Twips table_abs_y = block_absolute_y + block->table->getBounds().y;
                 int row_idx = 0;
                 for (const auto& row : block->table->rows) {
-                    int col_idx = 0;
+                    int logical_col = 0;
                     for (const auto& cell : row->cells) {
                         Twips cell_x = table_abs_x + cell->getBounds().x;
                         Twips cell_y = table_abs_y + row->getBounds().y;
@@ -525,7 +525,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                         Twips cell_h = cell->getBounds().height;
 
                         Rect left_handler{cell_x - Twips(150), cell_y, Twips(150), cell_h};
-                        if (col_idx == 0 && left_handler.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
+                        if (logical_col == 0 && left_handler.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
                             table_selection_.mode = TableSelectionMode::Row;
                             table_selection_.table_offset = block->table->logical_offset;
                             table_selection_.row = row_idx;
@@ -539,7 +539,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                             table_selection_.mode = TableSelectionMode::Column;
                             table_selection_.table_offset = block->table->logical_offset;
                             table_selection_.row = -1;
-                            table_selection_.col = col_idx;
+                            table_selection_.col = logical_col;
                             updateLayout();
                             return true;
                         }
@@ -548,9 +548,10 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                         if (right_edge.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
                             drag_mode_ = DragMode::TableColResize;
                             active_table_offset_ = block->table->logical_offset;
-                            active_table_col_ = col_idx;
+                            active_table_col_ = logical_col + cell->colspan - 1;
                             drag_start_x_ = absolute_x;
                             drag_initial_w_ = cell_w;
+                            drag_initial_col_widths_ = block->table->col_widths;
                             return true;
                         }
 
@@ -568,7 +569,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                             return true;
                         }
                         
-                        col_idx++;
+                        logical_col += cell->colspan;
                     }
                     row_idx++;
                 }
@@ -807,6 +808,60 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
     return false;
 }
 
+CursorType PlumaEditor::getCursorTypeAt(double x, double y) const {
+    Twips absolute_x = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
+    Twips absolute_y = Twips(static_cast<int32_t>(y * 15.0)) + viewport_y_;
+
+    Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
+    absolute_x = absolute_x - page_x;
+
+    auto process_blocks = [&](auto& self, const std::vector<std::unique_ptr<BlockBox>>& blocks, Twips base_x, Twips base_y) -> std::optional<CursorType> {
+        for (const auto& block : blocks) {
+            Twips block_absolute_y = base_y + block->getBounds().y;
+            Twips block_absolute_x = base_x + block->getBounds().x;
+            
+            if (block->table) {
+                Twips table_abs_x = block_absolute_x + block->table->getBounds().x;
+                Twips table_abs_y = block_absolute_y + block->table->getBounds().y;
+                for (const auto& row : block->table->rows) {
+                    for (const auto& cell : row->cells) {
+                        Twips cell_x = table_abs_x + cell->getBounds().x;
+                        Twips cell_y = table_abs_y + row->getBounds().y;
+                        Twips cell_w = cell->getBounds().width;
+                        Twips cell_h = cell->getBounds().height;
+
+                        Rect right_edge{cell_x + cell_w - Twips(45), cell_y, Twips(90), cell_h};
+                        if (right_edge.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
+                            return CursorType::ColResize;
+                        }
+                        
+                        auto res = self(self, cell->blocks, cell_x, cell_y);
+                        if (res.has_value()) return res;
+                    }
+                }
+            }
+        }
+        return std::nullopt;
+    };
+
+    Twips current_page_y(page_gap_);
+    for (const auto& page : current_pages_) {
+        if (absolute_y.getValue() >= current_page_y.getValue() && 
+            absolute_y.getValue() <= (current_page_y + page->getBounds().height).getValue()) {
+            
+            auto res = process_blocks(process_blocks, page->blocks, Twips(0), current_page_y);
+            if (res.has_value()) return *res;
+
+            if (absolute_x.getValue() >= 0 && absolute_x.getValue() <= page->getBounds().width.getValue()) {
+                return CursorType::Text;
+            }
+        }
+        current_page_y = current_page_y + page->getBounds().height + page_gap_;
+    }
+
+    return CursorType::Default;
+}
+
 bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
     PLUMA_PROFILE_SCOPE("PlumaEditor::onMouseMove");
     if (drag_mode_ == DragMode::None) return false;
@@ -884,64 +939,69 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
         }
 
         if (target.first) {
-            TableBox* t = target.first;
             Twips block_width = target.second;
-            if (!t->rows.empty()) {
-                const auto& cells = t->rows[0]->cells;
-                int num_cols = (int)cells.size();
-                if (num_cols > 0) {
-                    std::vector<float> widths(num_cols);
-                    float total_w = 0.0f;
+            int num_cols = (int)drag_initial_col_widths_.size();
+            if (num_cols > 0 && active_table_col_ < num_cols) {
+                std::vector<float> widths(num_cols);
+                float total_w = 0.0f;
+                for (int i = 0; i < num_cols; ++i) {
+                    widths[i] = (float)drag_initial_col_widths_[i].getValue();
+                    total_w += widths[i];
+                }
+
+                if (total_w > (float)block_width.getValue()) {
+                    float scale = (float)block_width.getValue() / total_w;
+                    total_w = 0.0f;
                     for (int i = 0; i < num_cols; ++i) {
-                        widths[i] = (float)cells[i]->getBounds().width.getValue();
+                        widths[i] *= scale;
                         total_w += widths[i];
                     }
-
-                    int right_cols = num_cols - active_table_col_ - 1;
-                    float left_w = 0.0f;
-                    for (int i = 0; i < active_table_col_; ++i) {
-                        left_w += widths[i];
-                    }
-                    
-                    float max_w;
-                    if (right_cols == 0) {
-                        max_w = (float)block_width.getValue() - left_w;
-                    } else {
-                        max_w = total_w - left_w - (float)(right_cols * 300);
-                    }
-                    
-                    float new_w_f = (float)new_w.getValue();
-                    if (new_w_f > max_w) new_w_f = max_w;
-                    if (new_w_f < 300.0f) new_w_f = 300.0f;
-
-                    float delta = new_w_f - widths[active_table_col_];
-
-                    float right_total = 0.0f;
-                    for (int i = active_table_col_ + 1; i < num_cols; ++i)
-                        right_total += widths[i];
-
-                    widths[active_table_col_] = new_w_f;
-
-                    if (right_total > 0.0f && right_cols > 0) {
-                        for (int i = active_table_col_ + 1; i < num_cols; ++i) {
-                            float share = widths[i] / right_total;
-                            widths[i] -= delta * share;
-                            if (widths[i] < 300.0f) widths[i] = 300.0f;
-                        }
-                        float new_total = 0.0f;
-                        for (float w : widths) new_total += w;
-                        float drift = total_w - new_total;
-                        widths[num_cols - 1] += drift;
-                        if (widths[num_cols - 1] < 300.0f) widths[num_cols - 1] = 300.0f;
-                    }
-
-                    std::string new_widths;
-                    for (int i = 0; i < num_cols; ++i) {
-                        if (i > 0) new_widths += ",";
-                        new_widths += std::to_string(widths[i] / 15.0f);
-                    }
-                    active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableColumnWidths, new_widths);
                 }
+
+                int right_cols = num_cols - active_table_col_ - 1;
+                float left_w = 0.0f;
+                for (int i = 0; i < active_table_col_; ++i) {
+                    left_w += widths[i];
+                }
+                
+                float max_w;
+                if (right_cols == 0) {
+                    max_w = (float)block_width.getValue() - left_w;
+                } else {
+                    max_w = total_w - left_w - (float)(right_cols * 300);
+                }
+                
+                float new_w_f = (float)new_w.getValue();
+                if (new_w_f > max_w) new_w_f = max_w;
+                if (new_w_f < 300.0f) new_w_f = 300.0f;
+
+                float delta = new_w_f - widths[active_table_col_];
+
+                float right_total = 0.0f;
+                for (int i = active_table_col_ + 1; i < num_cols; ++i)
+                    right_total += widths[i];
+
+                widths[active_table_col_] = new_w_f;
+
+                if (right_total > 0.0f && right_cols > 0) {
+                    for (int i = active_table_col_ + 1; i < num_cols; ++i) {
+                        float share = widths[i] / right_total;
+                        widths[i] -= delta * share;
+                        if (widths[i] < 300.0f) widths[i] = 300.0f;
+                    }
+                    float new_total = 0.0f;
+                    for (float w : widths) new_total += w;
+                    float drift = total_w - new_total;
+                    widths[num_cols - 1] += drift;
+                    if (widths[num_cols - 1] < 300.0f) widths[num_cols - 1] = 300.0f;
+                }
+
+                std::string new_widths;
+                for (int i = 0; i < num_cols; ++i) {
+                    if (i > 0) new_widths += ",";
+                    new_widths += std::to_string(static_cast<int>(widths[i] / 15.0f + 0.5f));
+                }
+                active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableColumnWidths, new_widths);
             }
         }
 
@@ -981,7 +1041,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             for (const auto& row : target_table->rows) {
                 float h_pt = (i == active_table_row_) ? (new_h.getValue() / 15.0f) : (row->getBounds().height.getValue() / 15.0f);
                 if (i > 0) new_heights += ",";
-                new_heights += std::to_string(h_pt);
+                new_heights += std::to_string(static_cast<int>(h_pt + 0.5f));
                 i++;
             }
             active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableRowHeights, new_heights);

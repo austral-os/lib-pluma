@@ -107,6 +107,14 @@ enum class ResizeHandle {
     Right 
 };
 
+enum class CursorType {
+    Default,
+    Text,
+    ColResize,
+    RowResize,
+    Pointer
+};
+
 /**
  * @class PlumaEditor
  * @brief The primary entry point for client applications to embed the document engine.
@@ -121,6 +129,11 @@ public:
      * @param default_font The base font used for layout and rendering.
      */
     PlumaEditor(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font);
+
+    /**
+     * @brief Gets the appropriate cursor type for the given coordinates.
+     */
+    CursorType getCursorTypeAt(double x, double y) const;
 
     /**
      * @brief Sets a callback that is fired whenever the cursor position changes.
@@ -567,6 +580,7 @@ private:
     Twips drag_initial_w_{0}, drag_initial_h_{0};
     Twips drag_start_abs_img_y_{0};
     Twips drag_start_img_height_{0};
+    std::vector<Twips> drag_initial_col_widths_;
 
     
     std::optional<uint32_t> active_table_offset_;

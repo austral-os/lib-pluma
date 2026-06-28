@@ -643,19 +643,170 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                     row->setBounds({Twips(0), table_height, content_width, row_heights[r]});
                     table_height = table_height + row_heights[r];
                 }
-                current_table->setBounds({Twips(0), Twips(0), content_width, table_height});
-                
-                auto block = std::make_unique<BlockBox>();
-                block->table = std::move(current_table);
-                block->setBounds({Twips(0), Twips(0), content_width, table_height});
-                
-                if (current_page_y.getValue() + table_height.getValue() > max_page_y.getValue()) {
-                    max_page_y = Twips(current_page_y.getValue() + table_height.getValue());
+                // --- TABLE PAGINATION LOGIC ---
+                std::unique_ptr<TableBox> table_part = std::make_unique<TableBox>();
+                table_part->col_widths = current_table->col_widths;
+                table_part->logical_offset = current_table->logical_offset;
+                table_part->hide_most_borders = current_table->hide_most_borders;
+
+                Twips current_table_y(0);
+                Twips part_height(0);
+
+                std::vector<TableCellBox*> active_spans(current_table->col_widths.size(), nullptr);
+                std::vector<int> span_remaining(current_table->col_widths.size(), 0);
+                std::vector<Twips> span_start_y(current_table->col_widths.size(), Twips(0));
+
+                for (size_t r = 0; r < current_table->rows.size(); ++r) {
+                    auto& src_row = current_table->rows[r];
+                    Twips rh = src_row->getBounds().height;
+                    
+                    if (current_page_y.getValue() + part_height.getValue() + rh.getValue() > column_start_y.getValue() + content_height.getValue() && part_height.getValue() > 0) {
+                        
+                        table_part->setBounds({Twips(0), Twips(0), content_width, part_height});
+                        table_part->is_split_bottom = true;
+                        auto block = std::make_unique<BlockBox>();
+                        block->table = std::move(table_part);
+                        block->setBounds({column_start_y, current_page_y, content_width, part_height});
+                        current_page->blocks.push_back(std::move(block));
+                        
+                        current_page_y = current_page_y + part_height;
+                        if (current_page_y.getValue() > max_page_y.getValue()) max_page_y = current_page_y;
+                        
+                        pages.push_back(std::move(current_page));
+                        setup_page(current_page, pages.size() + 1, current_page_y, content_height);
+                        column_start_y = current_page_y;
+                        max_page_y = current_page_y;
+                        current_column = 0;
+                        active_masks.clear();
+                        float_right_w = Twips(0); float_right_top = Twips(0); float_right_bottom = Twips(0);
+                        float_left_w  = Twips(0); float_left_top  = Twips(0); float_left_bottom  = Twips(0);
+                        
+                        table_part = std::make_unique<TableBox>();
+                        table_part->col_widths = current_table->col_widths;
+                        table_part->logical_offset = current_table->logical_offset;
+                        table_part->hide_most_borders = current_table->hide_most_borders;
+                        table_part->is_split_top = true;
+                        
+                        std::vector<std::unique_ptr<TableCellBox>> continuation_cells;
+                        
+                        for (size_t c = 0; c < active_spans.size(); ++c) {
+                            if (span_remaining[c] > 0) {
+                                auto orig_cell = active_spans[c];
+                                Twips split_h = part_height - span_start_y[c];
+                                
+                                auto split_cell = std::make_unique<TableCellBox>();
+                                split_cell->colspan = orig_cell->colspan;
+                                split_cell->rowspan = span_remaining[c];
+                                split_cell->col_idx = orig_cell->col_idx;
+                                split_cell->logical_offset = orig_cell->logical_offset;
+                                
+                                orig_cell->rowspan -= span_remaining[c];
+                                
+                                for (auto it = orig_cell->blocks.begin(); it != orig_cell->blocks.end(); ) {
+                                    Twips by = (*it)->getBounds().y;
+                                    Twips bh = (*it)->getBounds().height;
+                                    
+                                    if (by.getValue() >= split_h.getValue()) {
+                                        auto b = std::move(*it);
+                                        auto bounds = b->getBounds();
+                                        bounds.y = bounds.y - split_h;
+                                        b->setBounds(bounds);
+                                        split_cell->blocks.push_back(std::move(b));
+                                        it = orig_cell->blocks.erase(it);
+                                    } else if ((by + bh).getValue() > split_h.getValue()) {
+                                        auto& orig_block = *it;
+                                        auto sub_block = std::make_unique<BlockBox>();
+                                        sub_block->alignment = orig_block->alignment;
+                                        
+                                        Twips sub_y(0);
+                                        for (auto line_it = orig_block->lines.begin(); line_it != orig_block->lines.end(); ) {
+                                            Twips ly = by + (*line_it)->getBounds().y;
+                                            if (ly.getValue() >= split_h.getValue()) {
+                                                auto line = std::move(*line_it);
+                                                line->setBounds({line->getBounds().x, sub_y, line->getBounds().width, line->getBounds().height});
+                                                sub_y = sub_y + line->getBounds().height;
+                                                sub_block->lines.push_back(std::move(line));
+                                                line_it = orig_block->lines.erase(line_it);
+                                            } else {
+                                                ++line_it;
+                                            }
+                                        }
+                                        if (!sub_block->lines.empty()) {
+                                            sub_block->setBounds({orig_block->getBounds().x, Twips(0), orig_block->getBounds().width, sub_y});
+                                            split_cell->blocks.push_back(std::move(sub_block));
+                                        }
+                                        ++it;
+                                    } else {
+                                        ++it;
+                                    }
+                                }
+                                
+                                auto orig_bounds = orig_cell->getBounds();
+                                orig_cell->setBounds({orig_bounds.x, Twips(0), orig_bounds.width, split_h});
+                                split_cell->setBounds({orig_bounds.x, Twips(0), orig_bounds.width, orig_bounds.height - split_h});
+                                
+                                span_start_y[c] = Twips(0);
+                                for (int i = 1; i < split_cell->colspan; ++i) {
+                                    span_start_y[c + i] = Twips(0);
+                                }
+                                
+                                continuation_cells.push_back(std::move(split_cell));
+                                c += (orig_cell->colspan - 1);
+                            }
+                        }
+                        
+                        for (auto& cell : continuation_cells) {
+                            src_row->cells.push_back(std::move(cell));
+                        }
+                        std::sort(src_row->cells.begin(), src_row->cells.end(), [](const std::unique_ptr<TableCellBox>& a, const std::unique_ptr<TableCellBox>& b) {
+                            return a->col_idx < b->col_idx;
+                        });
+                        
+                        part_height = Twips(0);
+                        current_table_y = Twips(0);
+                    }
+                    
+                    for (auto& cell : src_row->cells) {
+                        if (cell->rowspan > 1) {
+                            active_spans[cell->col_idx] = cell.get();
+                            span_remaining[cell->col_idx] = cell->rowspan;
+                            span_start_y[cell->col_idx] = current_table_y;
+                            for (int c = 1; c < cell->colspan; ++c) {
+                                active_spans[cell->col_idx + c] = cell.get();
+                                span_remaining[cell->col_idx + c] = cell->rowspan;
+                                span_start_y[cell->col_idx + c] = current_table_y;
+                            }
+                        }
+                    }
+                    
+                    src_row->setBounds({src_row->getBounds().x, current_table_y, src_row->getBounds().width, rh});
+                    
+                    table_part->rows.push_back(std::move(src_row));
+                    part_height = part_height + rh;
+                    current_table_y = current_table_y + rh;
+                    
+                    for (size_t c = 0; c < span_remaining.size(); ++c) {
+                        if (span_remaining[c] > 0) {
+                            span_remaining[c]--;
+                            if (span_remaining[c] == 0) {
+                                active_spans[c] = nullptr;
+                                span_start_y[c] = Twips(0);
+                            }
+                        }
+                    }
                 }
                 
-                block->setBounds({column_start_y, current_page_y, content_width, table_height});
+                table_part->setBounds({Twips(0), Twips(0), content_width, part_height});
+                auto block = std::make_unique<BlockBox>();
+                block->table = std::move(table_part);
+                block->setBounds({column_start_y, current_page_y, content_width, part_height});
                 current_page->blocks.push_back(std::move(block));
-                current_page_y = current_page_y + table_height + Twips(240); // paragraph spacing
+                
+                if (current_page_y.getValue() + part_height.getValue() > max_page_y.getValue()) {
+                    max_page_y = Twips(current_page_y.getValue() + part_height.getValue());
+                }
+                current_page_y = current_page_y + part_height + Twips(240);
+                // --- END TABLE PAGINATION LOGIC ---
 
                 logical_offset += para.length() + 1;
                 continue;

@@ -166,6 +166,8 @@ public:
     std::vector<Twips> col_widths;                  ///< Computed logical column widths
     bool hide_most_borders = false;                 ///< Demo flag to hide borders
     uint32_t logical_offset{0};
+    bool is_split_top = false;
+    bool is_split_bottom = false;
 };
 
 /**

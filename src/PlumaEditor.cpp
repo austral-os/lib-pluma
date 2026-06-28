@@ -2017,6 +2017,12 @@ void PlumaEditor::render(IRenderer& renderer) {
                         draw_bottom = true;
                     }
                 }
+                if (table->is_split_bottom && row_idx == (int)table->rows.size() - 1) {
+                    draw_bottom = false;
+                }
+                if (table->is_split_top && row_idx == 0) {
+                    draw_top = false;
+                }
 
                 Twips top_width(15);
                 Twips bottom_width(15);

@@ -20,9 +20,11 @@ public:
     explicit ShaperCache(std::shared_ptr<ITextShaper> fallback) : fallback_(std::move(fallback)) {}
 
     ShapedTextRun shapeText(std::string_view text, const std::shared_ptr<IFont>& font) override {
-        // Simple cache using the text string as a key.
-        // In a real implementation, the key would include font properties.
-        std::string key(text);
+        // Cache key must include font properties to avoid collisions between headings and body text
+        std::string key = std::string(text) + "|" + font->getDescriptor().family + "|" + 
+                          std::to_string(font->getDescriptor().size_pt) + "|" + 
+                          std::to_string(static_cast<int>(font->getDescriptor().weight)) + "|" + 
+                          (font->getDescriptor().italic ? "I" : "N");
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = cache_.find(key);
         if (it != cache_.end()) {

@@ -455,6 +455,7 @@ public:
      * @brief Exposes the text for test assertions.
      */
     std::string getText() const { return active_doc_->document.getText(); }
+    uint32_t getDocumentLength() const { return active_doc_->document.getLength(); }
     
     /**
      * @brief Returns the current cursor position.

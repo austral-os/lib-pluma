@@ -1,4 +1,5 @@
 #include <pluma/Style/FormatRegistry.hpp>
+#include <algorithm>
 
 namespace pluma {
 
@@ -42,6 +43,11 @@ void FormatRegistry::clearDecorationGlobally(TextDecoration target_dec) {
             span.style.remove(PropertyId::Decoration);
         }
     }
+    
+    // Clean up empty spans
+    spans_.erase(std::remove_if(spans_.begin(), spans_.end(), [](const StyleSpan& span) {
+        return span.style.getAll().empty();
+    }), spans_.end());
 }
 
 void FormatRegistry::insertText(uint32_t offset, uint32_t length) {
@@ -81,7 +87,12 @@ void FormatRegistry::deleteText(uint32_t offset, uint32_t length) {
             }
         }
     }
-    spans_ = std::move(new_spans);
+    spans_.clear();
+    for (auto& span : new_spans) {
+        if (span.length > 0 && !span.style.getAll().empty()) {
+            spans_.push_back(std::move(span));
+        }
+    }
 }
 
 } // namespace pluma

@@ -1118,7 +1118,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
             
             if (current_table->logical_offset == *active_table_offset_ && 
                 (current_row != active_table_row_ || current_col != active_table_col_)) {
-                // Dragged into a different cell of the same table! Switch mode.
+                // Dragged into a different cell of the same table — switch mode.
                 drag_mode_ = DragMode::TableCellSelection;
                 table_selection_.mode = TableSelectionMode::Cell;
                 table_selection_.table_offset = *active_table_offset_;
@@ -1126,16 +1126,21 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                 table_selection_.col = active_table_col_;
                 table_selection_.end_row = current_row;
                 table_selection_.end_col = current_col;
-                updateLayout();
+                // Selection changes don't affect layout geometry; skip full rebuild.
+                updateCursorState();
                 return true;
             }
         }
 
-        auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_, absolute_x, absolute_y, page_gap_, active_region_);
+        auto offset_opt = CaretResolver::resolvePhysicalToLogical(current_pages_,
+            absolute_x, absolute_y, page_gap_, active_region_);
         if (offset_opt.has_value()) {
             if (active_doc_->selection.head != *offset_opt) {
                 active_doc_->selection.head = *offset_opt;
-                updateLayout();
+                // Selection doesn't change layout geometry — only the highlighted
+                // range changes, which render() computes from selection offsets
+                // against the existing layout boxes. No full rebuild needed.
+                updateCursorState();
             }
             return true;
         }
@@ -1152,7 +1157,8 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                 if (table_selection_.end_row != current_row || table_selection_.end_col != current_col) {
                     table_selection_.end_row = current_row;
                     table_selection_.end_col = current_col;
-                    updateLayout();
+                    // Selection-only change; render() picks it up from table_selection_ state.
+                    updateCursorState();
                 }
             }
         }

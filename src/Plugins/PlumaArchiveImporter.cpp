@@ -74,6 +74,8 @@ bool PlumaArchiveImporter::importFile(const std::string& filename, PlumaEditor& 
     try {
         json doc = json::parse(content);
         
+        editor.suspendLayout();
+        
         std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / 
             ("pluma_assets_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(temp_dir);
@@ -192,7 +194,9 @@ bool PlumaArchiveImporter::importFile(const std::string& filename, PlumaEditor& 
         // Restore active region to body
         editor.setActiveRegion(DocumentRegion::Body);
         
+        editor.resumeLayout();
     } catch (...) {
+        editor.resumeLayout();
         zip_close(archive);
         return false;
     }

@@ -168,6 +168,7 @@ public:
     uint32_t logical_offset{0};
     bool is_split_top = false;
     bool is_split_bottom = false;
+    int start_row_idx = 0;
 };
 
 /**

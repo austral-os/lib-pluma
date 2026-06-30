@@ -110,14 +110,14 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     Twips max_page_y = margins.top;
 
     // 1. Split into paragraphs by \n
-    std::string str_text(text);
+    std::string_view str_text(text);
     std::vector<std::string> paragraphs;
     size_t pos = 0;
-    while ((pos = str_text.find('\n')) != std::string::npos) {
-        paragraphs.push_back(str_text.substr(0, pos));
-        str_text.erase(0, pos + 1);
+    while ((pos = str_text.find('\n')) != std::string_view::npos) {
+        paragraphs.push_back(std::string(str_text.substr(0, pos)));
+        str_text = str_text.substr(pos + 1);
     }
-    paragraphs.push_back(str_text);
+    paragraphs.push_back(std::string(str_text));
 
     uint32_t logical_offset = 0;
 
@@ -218,6 +218,8 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         Twips total_gap = Twips(column_gap.getValue() * (total_columns - 1));
         Twips column_width = Twips((base_content_width.getValue() - total_gap.getValue()) / total_columns);
         content_width = column_width;
+        Twips current_page_x = margins.left + Twips((column_width.getValue() + column_gap.getValue()) * current_column);
+        
         // Line breaking for the entire paragraph (Block)
         auto block = std::make_unique<BlockBox>();
         Twips current_x(0);
@@ -648,6 +650,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 table_part->col_widths = current_table->col_widths;
                 table_part->logical_offset = current_table->logical_offset;
                 table_part->hide_most_borders = current_table->hide_most_borders;
+                table_part->start_row_idx = 0;
 
                 Twips current_table_y(0);
                 Twips part_height(0);
@@ -666,7 +669,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         table_part->is_split_bottom = true;
                         auto block = std::make_unique<BlockBox>();
                         block->table = std::move(table_part);
-                        block->setBounds({column_start_y, current_page_y, content_width, part_height});
+                        block->setBounds({current_page_x, current_page_y, content_width, part_height});
                         current_page->blocks.push_back(std::move(block));
                         
                         current_page_y = current_page_y + part_height;
@@ -686,6 +689,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         table_part->logical_offset = current_table->logical_offset;
                         table_part->hide_most_borders = current_table->hide_most_borders;
                         table_part->is_split_top = true;
+                        table_part->start_row_idx = r;
                         
                         std::vector<std::unique_ptr<TableCellBox>> continuation_cells;
                         
@@ -799,7 +803,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 table_part->setBounds({Twips(0), Twips(0), content_width, part_height});
                 auto block = std::make_unique<BlockBox>();
                 block->table = std::move(table_part);
-                block->setBounds({column_start_y, current_page_y, content_width, part_height});
+                block->setBounds({current_page_x, current_page_y, content_width, part_height});
                 current_page->blocks.push_back(std::move(block));
                 
                 if (current_page_y.getValue() + part_height.getValue() > max_page_y.getValue()) {
@@ -823,7 +827,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             auto block = std::make_unique<BlockBox>();
             block->is_horizontal_line = true;
             Twips line_height = Twips(240); // Standard spacing around the line
-            block->setBounds({column_start_y, current_page_y, content_width, line_height});
+            block->setBounds({current_page_x, current_page_y, content_width, line_height});
             current_page_y = current_page_y + line_height + Twips(120); // add some margin
             current_page->blocks.push_back(std::move(block));
             logical_offset += para.length() + 1;
@@ -1248,6 +1252,48 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                 dynamic_content_width = column_width - float_right_w;
             }
             Twips available_width = Twips((dynamic_content_width - para_right_indent).getValue() - current_x.getValue());
+            if (available_width.getValue() <= 0 && current_x.getValue() > (block->list_indent + para_left_indent).getValue()) {
+                // Break line immediately
+                Twips base_x = block->list_indent + para_left_indent;
+                Twips line_height = Twips(240); // 12pt approx
+                for (const auto& r : current_line->runs) {
+                    Twips h = r->run.max_ascent + r->run.max_descent;
+                    if (h.getValue() > line_height.getValue()) line_height = h;
+                }
+                
+                float line_spacing = 1.0f;
+                if (auto ls = para_style.get(PropertyId::LineSpacing)) {
+                    line_spacing = std::get<float>(*ls);
+                }
+                line_height = Twips(line_height.getValue() * line_spacing);
+
+                current_line->setBounds({Twips(0), current_y, current_x, line_height});
+                block->lines.push_back(std::move(current_line));
+
+                current_line = std::make_unique<LineBox>();
+                current_y = current_y + line_height;
+
+                if (drop_cap_lines > 0 && current_y.getValue() < dropcap_height.getValue()) {
+                    base_x = dropcap_width + Twips(100) + para_left_indent;
+                }
+                if ((current_page_y + current_y + line_height).getValue() > float_left_top.getValue() &&
+                    (current_page_y + current_y).getValue() < float_left_bottom.getValue()) {
+                    base_x = Twips(std::max(base_x.getValue(), float_left_w.getValue()));
+                }
+
+                current_x = base_x;
+
+                Twips next_dynamic_content_width = column_width;
+                if ((current_page_y + current_y + line_height + Twips(240)).getValue() > float_right_top.getValue() &&
+                    (current_page_y + current_y + line_height).getValue() < float_right_bottom.getValue()) {
+                    next_dynamic_content_width = column_width - float_right_w;
+                }
+
+                push_past_masks(current_x, current_page_y + current_y, word_width, line_height);
+
+                available_width = Twips((next_dynamic_content_width - para_right_indent).getValue() - current_x.getValue());
+            }
+
             if (available_width.getValue() < 0) available_width = Twips(0);
 
             if (word_width.getValue() > available_width.getValue()) {

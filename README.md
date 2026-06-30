@@ -58,17 +58,20 @@ ninja
 You can easily generate `.deb` installation packages using the included CPack configuration. The process generates two packages: a `Runtime` package for the end-user (contains only the shared library), and a `Development` package containing headers and CMake exports (`-dev.deb`).
 
 ```bash
-# Assuming you already ran cmake -B build ...
+# Assuming you already ran cmake -B build -G Ninja
 cd build
 ninja package
 
 # This will generate two files:
-# 1. libpluma-0.1.0-Linux-Runtime.deb
-# 2. libpluma-0.1.0-Linux-Development.deb
+# 1. libpluma-0.4.0.deb        ← runtime (shared library)
+# 2. libpluma-dev-0.4.0.deb   ← headers + CMake exports
 
-# To install the development package locally:
-sudo dpkg -i libpluma-0.1.0-Linux-Development.deb
+# To install locally:
+sudo dpkg -i libpluma-dev-0.4.0.deb
 ```
+
+> **Note:** The `build/` folder is fully regenerable. If you delete it, just run
+> `cmake -B build -G Ninja` again and all build capabilities (including `ninja package`) will be restored.
 
 ## 🚀 Quick Start Example
 

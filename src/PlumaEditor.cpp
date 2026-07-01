@@ -461,11 +461,13 @@ std::tuple<TableBox*, int, int> PlumaEditor::findTableCellAt(Twips absolute_x, T
 
 
 bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFlags mods) {
-    if (button != MouseButton::Left) return false;
+    const bool is_left_click = button == MouseButton::Left;
+    const bool is_right_click = button == MouseButton::Right;
+    if (!is_left_click && !is_right_click) return false;
 
     syncLayout();
 
-    is_dragging_ = true;
+    is_dragging_ = is_left_click;
     // Resetear el timestamp de throttle para que el primer move sea inmediato
     last_drag_layout_time_ = std::chrono::steady_clock::time_point{};
 
@@ -487,7 +489,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                 Twips img_abs_y = block_absolute_y + img->getBounds().y;
                 Rect img_rect{img_abs_x, img_abs_y, img->getBounds().width, img->getBounds().height};
                 
-                if (selected_image_offset_.has_value() && *selected_image_offset_ == img->logical_offset) {
+                if (is_left_click && selected_image_offset_.has_value() && *selected_image_offset_ == img->logical_offset) {
                     Twips hw(120); // 8px handle width
                     Rect br{img_rect.x + img_rect.width - hw, img_rect.y + img_rect.height - hw, hw, hw};
                     if (br.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
@@ -504,6 +506,15 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
                 if (img_rect.intersects({absolute_x, absolute_y, Twips(1), Twips(1)})) {
                     selected_image_offset_ = img->logical_offset;
                     active_doc_->selection.head = active_doc_->selection.anchor = img->logical_offset;
+
+                    if (is_right_click) {
+                        drag_mode_ = DragMode::None;
+                        active_handle_ = ResizeHandle::None;
+                        updateLayout();
+                        updateCursorState();
+                        return true;
+                    }
+
                     drag_mode_ = DragMode::ImageMove;
                     drag_start_x_ = absolute_x;
                     drag_start_y_ = absolute_y;
@@ -589,6 +600,8 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
         }
         current_page_y = current_page_y + page->getBounds().height + page_gap_;
     }
+
+    if (is_right_click) return false;
 
     selected_image_offset_ = std::nullopt;
     drag_mode_ = DragMode::Text;

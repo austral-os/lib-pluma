@@ -1941,6 +1941,51 @@ void PlumaEditor::deleteSelectedImage() {
     }
 }
 
+std::pair<float, float> PlumaEditor::getSelectedImageSize() const {
+    if (!selected_image_offset_.has_value()) return {0, 0};
+    uint32_t offset = *selected_image_offset_;
+    auto style = active_doc_->format_registry.getStyleAt(offset);
+    float w = 0, h = 0;
+    if (auto v = style.get(PropertyId::ImageWidth)) w = std::get<float>(*v);
+    if (auto v = style.get(PropertyId::ImageHeight)) h = std::get<float>(*v);
+    if (w > 0 && h > 0) return {w, h};
+
+    auto find_rendered_size = [&](auto& self, const std::vector<std::unique_ptr<BlockBox>>& blocks) -> std::pair<float, float> {
+        for (const auto& block : blocks) {
+            for (const auto& img : block->images) {
+                if (img->logical_offset == offset) {
+                    const auto& bounds = img->getBounds();
+                    return {bounds.width.getValue() / 15.0f, bounds.height.getValue() / 15.0f};
+                }
+            }
+
+            if (block->table) {
+                for (const auto& row : block->table->rows) {
+                    for (const auto& cell : row->cells) {
+                        auto size = self(self, cell->blocks);
+                        if (size.first > 0 && size.second > 0) return size;
+                    }
+                }
+            }
+        }
+
+        return {0, 0};
+    };
+
+    for (const auto& page : current_pages_) {
+        auto size = find_rendered_size(find_rendered_size, page->blocks);
+        if (size.first > 0 && size.second > 0) return size;
+
+        size = find_rendered_size(find_rendered_size, page->header_blocks);
+        if (size.first > 0 && size.second > 0) return size;
+
+        size = find_rendered_size(find_rendered_size, page->footer_blocks);
+        if (size.first > 0 && size.second > 0) return size;
+    }
+
+    return {w, h};
+}
+
 void PlumaEditor::updateLayout() {
     PLUMA_PROFILE_SCOPE("PlumaEditor::updateLayout");
     if (layout_suspended_) {

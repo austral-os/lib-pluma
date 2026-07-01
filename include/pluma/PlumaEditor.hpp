@@ -355,6 +355,13 @@ public:
     void selectImage(uint32_t offset) {
         selected_image_offset_ = offset;
     }
+
+    /// Returns true if an image is currently selected
+    bool isImageSelected() const { return selected_image_offset_.has_value(); }
+
+    /// Returns the width and height (in points) of the selected image
+    /// Returns {0, 0} if no image is selected or dimensions are not set.
+    std::pair<float, float> getSelectedImageSize() const;
     
     void insertTableRowAbove();
     void insertTableRowBelow();

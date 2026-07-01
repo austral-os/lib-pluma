@@ -1178,6 +1178,46 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
     return false;
 }
 
+bool PlumaEditor::isPositionBelowContent(Twips absolute_y) const {
+    if (current_pages_.empty()) return true;
+
+    // Calculate Y of the last page in document coordinates
+    const auto& last_page = current_pages_.back();
+    Twips last_page_y(page_gap_);
+    for (size_t i = 0; i < current_pages_.size() - 1; ++i) {
+        last_page_y = last_page_y + current_pages_[i]->getBounds().height + page_gap_;
+    }
+
+    // Get the appropriate blocks pointer based on active_region_
+    const std::vector<std::unique_ptr<BlockBox>>* blocks_ptr = nullptr;
+    switch (active_region_) {
+        case DocumentRegion::Header:
+            blocks_ptr = &last_page->header_blocks;
+            break;
+        case DocumentRegion::Body:
+            blocks_ptr = &last_page->blocks;
+            break;
+        case DocumentRegion::Footer:
+            blocks_ptr = &last_page->footer_blocks;
+            break;
+    }
+
+    // Find bottom-most content
+    Twips content_bottom = last_page_y;
+    if (blocks_ptr) {
+        for (const auto& block : *blocks_ptr) {
+            Twips block_bottom = last_page_y + block->getBounds().y + block->getBounds().height;
+            if (block_bottom.getValue() > content_bottom.getValue()) {
+                content_bottom = block_bottom;
+            }
+        }
+    }
+
+    Twips page_bottom = last_page_y + last_page->getBounds().height;
+
+    return absolute_y.getValue() > content_bottom.getValue() && absolute_y.getValue() <= page_bottom.getValue();
+}
+
 bool PlumaEditor::onMouseDoubleClick(double x, double y, MouseButton button, ModifierFlags mods) {
     (void)mods;
     if (button != MouseButton::Left) return false;
@@ -1189,6 +1229,22 @@ bool PlumaEditor::onMouseDoubleClick(double x, double y, MouseButton button, Mod
 
     Twips page_x = current_pages_.empty() ? Twips(0) : Twips(std::max(0, (width_.getValue() - current_pages_[0]->getBounds().width.getValue()) / 2));
     absolute_x = absolute_x - page_x;
+
+    // NEW: If double-clicking below all content on the page, insert newline at end.
+    // This allows creating an empty line after tables/images that are at document end.
+    if (active_region_ == DocumentRegion::Body && isPositionBelowContent(absolute_y)) {
+        std::string text = active_doc_->document.getText();
+        uint32_t doc_len = active_doc_->document.getLength();
+        if (text.empty() || text.back() != '\n') {
+            active_doc_->document.insert(doc_len, "\n");
+            active_doc_->format_registry.insertText(doc_len, 1);
+            m_content_modified_ = true;
+        }
+        active_doc_->selection.head = active_doc_->selection.anchor = active_doc_->document.getLength();
+        updateLayout();
+        updateCursorState();
+        return true;
+    }
 
     if (!current_pages_.empty()) {
         Twips page_total = current_pages_[0]->getBounds().height + page_gap_;

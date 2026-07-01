@@ -639,6 +639,7 @@ private:
 
     bool m_content_modified_{false};
     
+    bool isPositionBelowContent(Twips absolute_y) const;
     void updateCursorState();
 };
 

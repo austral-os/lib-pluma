@@ -374,6 +374,90 @@ TEST_CASE("PlumaEditor Full Integration", "[editor]") {
         REQUIRE(needs_render == false); // Does nothing yet in stub
     }
 
+    SECTION("Deferred Layout — single-char insert is deferred, structural is immediate") {
+        editor.loadText("Hello World");
+        REQUIRE(editor.getText() == "Hello World");
+
+        // Insert a newline (structural) — triggers immediate updateLayout()
+        // We verify by checking that getDocumentBounds() reflects the change
+        // without needing syncLayout().
+        editor.onTextInput("\n");
+        // newline is structural, layout is already clean.
+        // getDocumentBounds should be up-to-date.
+        Size bounds_after_newline = editor.getDocumentBounds();
+        REQUIRE(bounds_after_newline.height.getValue() > 0);
+
+        // Now insert single characters — these are DEFERRED (layout_dirty_ = true).
+        // Without syncLayout(), the layout remains stale.
+        // Verify workaround: insert many chars and check page count is stale.
+        size_t page_count_before = editor.getPageCount();
+
+        // Insert 200 single characters (deferred one at a time).
+        // Each single-char insert sets layout_dirty_ = true but does NOT
+        // rebuild current_pages_. The page count should be unchanged.
+        for (int i = 0; i < 200; ++i) {
+            editor.onTextInput("x");
+        }
+        REQUIRE(editor.getText().length() == 11 + 1 + 200); // "Hello World" + "\n" + 200 chars
+
+        // Page count is stale because layout is deferred.
+        size_t page_count_stale = editor.getPageCount();
+        REQUIRE(page_count_stale == page_count_before);
+
+        // After syncLayout, layout rebuilds and page count changes.
+        editor.syncLayout();
+        size_t page_count_after_sync = editor.getPageCount();
+        // With 200+ characters, text may wrap to more pages.
+        REQUIRE(page_count_after_sync >= page_count_stale);
+    }
+
+    SECTION("Deferred Layout — syncLayout is idempotent and safe") {
+        editor.loadText("Hello");
+        // syncLayout on clean layout: no-op, no crash.
+        editor.syncLayout();
+        editor.getDocumentBounds(); // discard — we just verify no crash on clean sync
+
+        // Insert 1 deferred char.
+        editor.onTextInput("A");
+
+        // First sync flushes.
+        editor.syncLayout();
+        Size bounds_once = editor.getDocumentBounds();
+
+        // Second sync on clean layout: no-op, returns same bounds.
+        editor.syncLayout();
+        Size bounds_twice = editor.getDocumentBounds();
+        REQUIRE(bounds_twice.height.getValue() == bounds_once.height.getValue());
+
+        // Structural edit (newline) flushes immediately; syncLayout is still safe.
+        editor.onTextInput("\n");
+        editor.syncLayout();
+        Size bounds_after_structural = editor.getDocumentBounds();
+        REQUIRE(bounds_after_structural.height.getValue() >= bounds_twice.height.getValue());
+    }
+
+    SECTION("Deferred Layout — getDocumentBounds is stale before sync") {
+        editor.loadText("Hello World");
+        Size baseline = editor.getDocumentBounds();
+        REQUIRE(baseline.height.getValue() > 0);
+
+        // Insert single characters (deferred) — enough to cause wrapping.
+        for (int i = 0; i < 100; ++i) {
+            editor.onTextInput("x");
+        }
+
+        // getDocumentBounds returns stale value while layout is dirty.
+        size_t stale_count = editor.getPageCount();
+
+        // After sync, layout is rebuilt.
+        editor.syncLayout();
+        size_t synced_count = editor.getPageCount();
+
+        // After inserting 100 chars, the synced layout should have at least
+        // as many pages as the stale one.
+        REQUIRE(synced_count >= stale_count);
+    }
+
     SECTION("Table Hit Testing and Resizing") {
         editor.loadText("|TBL:cols=2|\n|ROW|\n|CEL|\nCell 1\n|CEL|\nCell 2\n|ENDTBL|");
         

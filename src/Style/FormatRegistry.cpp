@@ -1,5 +1,7 @@
 #include <pluma/Style/FormatRegistry.hpp>
+#include <pluma/Diagnostics/Profiler.hpp>
 #include <algorithm>
+#include <utility>
 
 namespace pluma {
 
@@ -22,14 +24,33 @@ void FormatRegistry::applyStyle(uint32_t start, uint32_t length, PropertyId id, 
 }
 
 PropertyBag FormatRegistry::getStyleAt(uint32_t offset) const {
+    PLUMA_PROFILE_SCOPE("FormatRegistry::getStyleAt");
+
+    // Linear scan of spans, merging covering styles in cascade order
     PropertyBag computed;
-    // Apply in order to simulate cascade (last applied wins)
     for (const auto& span : spans_) {
-        if (offset >= span.start && offset < span.start + span.length) {
+        const uint32_t span_end = span.start + span.length;
+        if (span_end >= span.start && offset >= span.start && offset < span_end) {
             computed.merge(span.style);
         }
     }
     return computed;
+}
+
+uint32_t FormatRegistry::getStyleRangeEnd(uint32_t offset) const {
+    PLUMA_PROFILE_SCOPE("FormatRegistry::getStyleRangeEnd");
+
+    uint32_t next_change = UINT32_MAX;
+    for (const auto& span : spans_) {
+        const uint32_t span_end = span.start + span.length;
+        if (span.start > offset && span.start < next_change) {
+            next_change = span.start;
+        }
+        if (span_end >= span.start && span_end > offset && span_end < next_change) {
+            next_change = span_end;
+        }
+    }
+    return next_change;
 }
 
 void FormatRegistry::clear() {
@@ -51,6 +72,7 @@ void FormatRegistry::clearDecorationGlobally(TextDecoration target_dec) {
 }
 
 void FormatRegistry::insertText(uint32_t offset, uint32_t length) {
+    PLUMA_PROFILE_SCOPE("FormatRegistry::insertText");
     for (auto& span : spans_) {
         if (span.start > offset) {
             span.start += length;
@@ -93,6 +115,10 @@ void FormatRegistry::deleteText(uint32_t offset, uint32_t length) {
             spans_.push_back(std::move(span));
         }
     }
+}
+
+void FormatRegistry::setSpans(const std::vector<StyleSpan>& spans) {
+    spans_ = spans;
 }
 
 } // namespace pluma

@@ -302,6 +302,22 @@ public:
     void setPageGap(Twips gap);
 
     /**
+     * @brief Flushes any pending deferred layout.  Must be called before any
+     *        geometry read (render, hit-testing, cursor queries) when the
+     *        caller may have incurred deferred-layout insertions.
+     *
+     * Calling this is only necessary when `insertTextAtCursor` was called
+     * with a single non-structural character.  Structural edits (paste,
+     * newline, delete, undo/redo, table ops) always flush synchronously.
+     *
+     * The app SHOULD call syncLayout() before `render()` and before any
+     * const geometry query such as `getCursorTypeAt()`.
+     *
+     * Safe to call any number of times — no-op when layout is already clean.
+     */
+    void syncLayout();
+
+    /**
      * @brief Applies a text style to a specific range of characters.
      */
     void applyStyle(uint32_t start, uint32_t length, PropertyId id, PropertyValue value);
@@ -604,6 +620,7 @@ private:
     
     bool layout_suspended_{false};
     bool layout_pending_{false};
+    bool layout_dirty_{false};
     bool is_printing_{false};
     
     // Throttle de layout durante drag: evita relayout en cada pixel del mouse

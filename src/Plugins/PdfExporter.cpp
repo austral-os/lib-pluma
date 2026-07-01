@@ -51,6 +51,11 @@ bool PdfExporter::exportToFile(const std::string& filename, PlumaEditor& editor)
     editor.setPageBackgroundColor(Color(0xFFFFFFFF));
     editor.setDefaultTextColor(Color(0xFF000000));
     
+    // Flush any deferred layout — setPageGap above calls updateLayout() which
+    // already syncs, but this guards against future code paths where the layout
+    // may be stale before getPageCount().
+    editor.syncLayout();
+
     size_t page_count = editor.getPageCount();
     if (page_count == 0) page_count = 1;
 

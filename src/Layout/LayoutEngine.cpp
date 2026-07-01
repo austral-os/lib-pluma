@@ -10,10 +10,190 @@
 #include "../Render/stb_image.h"
 #include <pluma/Render/ImageMask.hpp>
 #include <unordered_map>
+#include <memory>
 #include <mutex>
 #include <functional>
 
 namespace pluma {
+
+// ---------------------------------------------------------------------------
+// Table-cell layout cache: deep-clone helpers (local to this translation unit)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Deep-clone helpers — defined in dependency order (leaf types first)
+// ---------------------------------------------------------------------------
+
+/// Deep-clone a single RunBox, optionally shifting logical_offset by delta.
+std::unique_ptr<RunBox> cloneRunBox(const RunBox& src, int32_t offset_delta = 0) {
+    auto c = std::make_unique<RunBox>();
+    c->run = src.run;
+    c->logical_text = src.logical_text;
+    c->display_text = src.display_text;
+    c->logical_offset = static_cast<uint32_t>(
+        static_cast<int32_t>(src.logical_offset) + offset_delta);
+    c->style = src.style;
+    c->setBounds(src.getBounds());
+    return c;
+}
+
+/// Deep-clone a LineBox (clones all runs), shifting logical offsets by delta.
+static std::unique_ptr<LineBox> cloneLineBox(const LineBox& src, int32_t offset_delta = 0) {
+    auto c = std::make_unique<LineBox>();
+    c->baseline = src.baseline;
+    c->setBounds(src.getBounds());
+    c->runs.reserve(src.runs.size());
+    for (const auto& r : src.runs) {
+        c->runs.push_back(cloneRunBox(*r, offset_delta));
+    }
+    return c;
+}
+
+/// Deep-clone a BlockBox.  Returns nullptr if the block contains a nested
+/// table, images, or a drop cap (caller should fall through to full layout).
+/// All run logical_offsets are shifted by offset_delta (default 0).
+static std::unique_ptr<BlockBox> cloneBlockBox(const BlockBox& src, int32_t offset_delta = 0) {
+    // Safety: skip caching for blocks with complex nested content
+    if (src.table || !src.images.empty() || src.drop_cap) {
+        return nullptr;
+    }
+
+    auto c = std::make_unique<BlockBox>();
+    c->alignment = src.alignment;
+    c->is_horizontal_line = src.is_horizontal_line;
+    c->list_marker = src.list_marker;
+    c->list_indent = src.list_indent;
+    c->setBounds(src.getBounds());
+    c->lines.reserve(src.lines.size());
+    for (const auto& line : src.lines) {
+        c->lines.push_back(cloneLineBox(*line, offset_delta));
+    }
+    // images, table, drop_cap left as default (empty/nullptr) — checked above
+    return c;
+}
+
+/// Deep-clone the main blocks from a PageBox into a new vector,
+/// shifting all run logical_offsets by offset_delta.
+/// Returns empty vector if any block cannot be cloned (complex content).
+static std::vector<std::unique_ptr<BlockBox>> cloneCellBlocks(const std::vector<std::unique_ptr<BlockBox>>& src_blocks, int32_t offset_delta = 0) {
+    std::vector<std::unique_ptr<BlockBox>> result;
+    result.reserve(src_blocks.size());
+    for (const auto& b : src_blocks) {
+        auto cloned = cloneBlockBox(*b, offset_delta);
+        if (!cloned) {
+            result.clear();
+            return result; // abort — complex nested content
+        }
+        result.push_back(std::move(cloned));
+    }
+    return result;
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// LayoutEngine::computeCellStyleHash (static)
+// ---------------------------------------------------------------------------
+
+size_t LayoutEngine::computeCellStyleHash(const FormatRegistry& registry,
+                                           uint32_t range_start,
+                                           uint32_t range_end) {
+    size_t h = 0;
+    uint32_t pos = range_start;
+    while (pos < range_end) {
+        PropertyBag style = registry.getStyleAt(pos);
+        uint32_t run_end = registry.getStyleRangeEnd(pos);
+        if (run_end > range_end) run_end = range_end;
+        uint32_t run_length = run_end - pos;
+
+        // Hash the run length (relative within cell)
+        h ^= std::hash<uint32_t>{}(run_length) + 0x9e3779b9 + (h << 6) + (h >> 2);
+
+        // Hash the style properties for this run
+        for (const auto& [id, val] : style.getAll()) {
+            size_t id_h = std::hash<int>{}(static_cast<int>(id));
+            size_t val_h = std::visit([](const auto& v) -> size_t {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, std::string>) {
+                    return std::hash<std::string>{}(v);
+                } else if constexpr (std::is_same_v<T, float>) {
+                    return std::hash<float>{}(v);
+                } else if constexpr (std::is_same_v<T, uint16_t>) {
+                    return std::hash<uint16_t>{}(v);
+                } else if constexpr (std::is_same_v<T, bool>) {
+                    return std::hash<bool>{}(v);
+                } else if constexpr (std::is_same_v<T, Color>) {
+                    return std::hash<uint32_t>{}(v);
+                } else if constexpr (std::is_same_v<T, int>) {
+                    return std::hash<int>{}(v);
+                } else {
+                    return std::hash<int>{}(static_cast<int>(v));
+                }
+            }, val);
+            h ^= id_h + 0x9e3779b9 + (val_h << 6) + (val_h >> 2);
+        }
+
+        pos = run_end;
+    }
+    return h;
+}
+
+/// Opaque table-cell layout cache.
+///
+/// Key: cell-identity properties that determine layout (text, width,
+/// page-sensitive fields, cell-local style hash).  Does NOT include
+/// absolute document offset — the cached blocks store the absolute
+/// offset they were laid-out at and are adjusted on retrieval.
+///
+/// Value: the cell's laid-out blocks plus the absolute offset they
+/// were stored at, so a delta can be applied on cache hit.
+struct TableCellCache {
+    struct Key {
+        std::string cell_text;       ///< Raw text content of the cell
+        int32_t cell_width;          ///< Cell width in twips
+        int override_page_number;    ///< Page number for |FIELD:PAGE| resolution
+        int total_pages;             ///< For |FIELD:PAGECOUNT| resolution
+        size_t cell_style_hash;      ///< Hash of style properties within cell range only
+
+        bool operator==(const Key& o) const noexcept {
+            return cell_text == o.cell_text
+                && cell_width == o.cell_width
+                && override_page_number == o.override_page_number
+                && total_pages == o.total_pages
+                && cell_style_hash == o.cell_style_hash;
+        }
+    };
+
+    struct KeyHash {
+        size_t operator()(const Key& k) const noexcept {
+            size_t h = std::hash<std::string>{}(k.cell_text);
+            h ^= std::hash<int32_t>{}(k.cell_width) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int>{}(k.override_page_number) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int>{}(k.total_pages) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= k.cell_style_hash + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    struct Value {
+        int32_t stored_abs_offset;                         ///< Absolute doc offset when stored
+        std::vector<std::unique_ptr<BlockBox>> blocks;      ///< Deep-cloned blocks with abs offsets
+    };
+
+    /// Max cache entries before eviction (safety bound).
+    static constexpr size_t kMaxEntries = 256;
+
+    /// Cache: key → (stored_abs_offset, blocks)
+    std::unordered_map<Key, Value, KeyHash> entries;
+
+    void evictIfNeeded() {
+        if (entries.size() >= kMaxEntries) {
+            entries.clear();
+        }
+    }
+};
 
 struct CachedImageInfo {
     int w, h, comp;
@@ -26,6 +206,8 @@ static std::unordered_map<std::string, CachedImageInfo> g_info_cache;
 
 LayoutEngine::LayoutEngine(std::shared_ptr<ITextShaper> shaper, std::shared_ptr<IFont> default_font)
     : shaper_(std::move(shaper)), font_(std::move(default_font)) {}
+
+LayoutEngine::~LayoutEngine() = default; // Required for opaque TableCellCache
 
 std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     std::string_view text, 
@@ -46,11 +228,25 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
 ) {
     PLUMA_PROFILE_SCOPE("LayoutEngine::layoutText");
     std::vector<std::unique_ptr<PageBox>> pages;
-    
 
+    // Track layout recursion depth. Top-level calls (depth==1) lazily init
+    // the cache and evict if needed.
+    ++layout_depth_;
+    if (layout_depth_ == 1) {
+        if (!cell_cache_) {
+            cell_cache_ = std::make_unique<TableCellCache>();
+        }
+        cell_cache_->evictIfNeeded();
+        // Reset cache instrumentation counters for this top-level layout pass.
+        cell_cache_hits_ = 0;
+        cell_cache_misses_ = 0;
+    }
+    // NOTE: style hash is no longer computed globally.  Each table cell
+    // computes its own cell-local hash inside layout_current_cell, using
+    // the registry and abs_offset in that stack frame.  This ensures
+    // cells in header/footer use the correct registry and the hash is
+    // invariant under text changes outside the cell's range.
 
-
-    
     auto setup_page = [&](std::unique_ptr<PageBox>& page, int page_idx, Twips& start_y, Twips& avail_height) {
         page = std::make_unique<PageBox>();
         page->laid_out_total_pages = total_pages;
@@ -58,6 +254,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         Twips header_h(0), footer_h(0);
         
         if (has_header_cb && has_header_cb(page_idx) && !header_text.empty() && header_registry) {
+            PLUMA_PROFILE_SCOPE("LayoutEngine::layoutText.header");
             auto h_pages = layoutText(header_text, page_size, margins, *header_registry, "", nullptr, "", nullptr, nullptr, nullptr, 0, page_idx);
             if (!h_pages.empty()) {
                 page->header_blocks = std::move(h_pages[0]->blocks);
@@ -71,6 +268,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         }
         
         if (has_footer_cb && has_footer_cb(page_idx) && !footer_text.empty() && footer_registry) {
+            PLUMA_PROFILE_SCOPE("LayoutEngine::layoutText.footer");
             auto f_pages = layoutText(footer_text, page_size, margins, *footer_registry, "", nullptr, "", nullptr, nullptr, nullptr, 0, page_idx);
             if (!f_pages.empty()) {
                 page->footer_blocks = std::move(f_pages[0]->blocks);
@@ -157,6 +355,87 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
     std::vector<int> active_rowspans;
     int col_idx = 0;
     int table_depth = 0;
+
+    // Helper: perform table-cell layout with caching.
+    // Must be defined here (after all table-related locals are declared).
+    // Uses cell_buffer, cell_offset_base, current_cell from enclosing scope.
+    //
+    // Cache key is position-independent (text + width + page fields +
+    // cell-local style hash).  On hit, offset delta is applied to each
+    // run's logical_offset so absolute positions remain correct.
+    auto layout_current_cell = [&](Twips cw) {
+        PLUMA_PROFILE_SCOPE("LayoutEngine::layoutText.tableCell");
+        int eff_page = override_page_number > 0 ? override_page_number
+                                                 : static_cast<int>(pages.size() + 1);
+        uint32_t abs_offset = logical_offset_base + cell_offset_base;
+        uint32_t cell_end = abs_offset + static_cast<uint32_t>(cell_buffer.size());
+
+        // Compute cell-local style hash (only styles intersecting this cell's range)
+        size_t cell_hash = computeCellStyleHash(registry, abs_offset, cell_end);
+
+        // Cache lookup with position-independent key
+        if (cell_cache_) {
+            TableCellCache::Key key{
+                cell_buffer, cw.getValue(),
+                eff_page, total_pages, cell_hash
+            };
+            auto it = cell_cache_->entries.find(key);
+            if (it != cell_cache_->entries.end()) {
+                PLUMA_PROFILE_SCOPE("LayoutEngine::tableCell.cacheHit");
+                // Compute offset delta and apply when cloning
+                int32_t delta = static_cast<int32_t>(abs_offset)
+                              - static_cast<int32_t>(it->second.stored_abs_offset);
+                auto cloned = cloneCellBlocks(it->second.blocks, delta);
+                if (!cloned.empty()) {
+                    for (auto& b : cloned)
+                        current_cell->blocks.push_back(std::move(b));
+                    current_cell->setBounds({Twips(0), Twips(0), cw, Twips(10000)});
+                    ++cell_cache_hits_;
+                    return; // cache hit
+                }
+            }
+        }
+
+        // Cache miss or cache bypassed: perform full cell layout
+        {
+        PLUMA_PROFILE_SCOPE("LayoutEngine::tableCell.cacheMiss");
+        auto cell_pages = layoutText(
+            cell_buffer,
+            {cw, Twips(1000000)},
+            {Twips(60), Twips(60), Twips(60), Twips(60)},
+            registry,
+            "", nullptr,
+            "", nullptr,
+            nullptr, nullptr,
+            abs_offset,
+            eff_page,
+            false, false,
+            total_pages
+        );
+        if (cell_pages.empty()) return;
+
+        // Store a deep-cloned copy in cache (before moving originals).
+        // Blocks keep absolute offsets as-laid-out; we store abs_offset
+        // alongside so a delta can be applied on future cache hits.
+        if (cell_cache_) {
+            TableCellCache::Key key{
+                cell_buffer, cw.getValue(),
+                eff_page, total_pages, cell_hash
+            };
+            if (cell_cache_->entries.find(key) == cell_cache_->entries.end()) {
+                auto cached = cloneCellBlocks(cell_pages[0]->blocks, 0);
+                if (!cached.empty()) {
+                    cell_cache_->entries[key] = {static_cast<int32_t>(abs_offset), std::move(cached)};
+                }
+            }
+        }
+
+        ++cell_cache_misses_;
+        for (auto& b : cell_pages[0]->blocks)
+            current_cell->blocks.push_back(std::move(b));
+        current_cell->setBounds({Twips(0), Twips(0), cw, Twips(10000)});
+        }
+    };
 
     for (const auto& para : paragraphs) {
         if (para.length() >= 9 && para.substr(0, 9) == "|COLUMNS:") {
@@ -447,11 +726,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1), false, false, total_pages);
-                        if (!cell_pages.empty()) {
-                            for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
-                        }
-                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
+                        layout_current_cell(cell_width);
                     }
                     if (current_row) current_row->cells.push_back(std::move(current_cell));
                 }
@@ -489,12 +764,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
-                        
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1), false, false, total_pages);
-                        if (!cell_pages.empty()) {
-                            for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
-                        }
-                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
+                        layout_current_cell(cell_width);
                     }
                     if (current_row) current_row->cells.push_back(std::move(current_cell));
                     
@@ -546,12 +816,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
                         for (int i = 0; i < span && (current_cell->col_idx + i) < table_cols; ++i) {
                             cell_width = cell_width + ((static_cast<size_t>(current_cell->col_idx + i) < table_col_widths.size()) ? table_col_widths[current_cell->col_idx + i] : Twips(content_width.getValue() / table_cols));
                         }
-                        
-                        auto cell_pages = layoutText(cell_buffer, {cell_width, Twips(1000000)}, {Twips(60),Twips(60),Twips(60),Twips(60)}, registry, "", nullptr, "", nullptr, nullptr, nullptr, logical_offset_base + cell_offset_base, override_page_number > 0 ? override_page_number : (int)(pages.size() + 1), false, false, total_pages);
-                        if (!cell_pages.empty()) {
-                            for (auto& b : cell_pages[0]->blocks) current_cell->blocks.push_back(std::move(b));
-                        }
-                        current_cell->setBounds({Twips(0), Twips(0), cell_width, Twips(10000)});
+                        layout_current_cell(cell_width);
                     }
                     if (current_row) current_row->cells.push_back(std::move(current_cell));
                 }
@@ -1137,12 +1402,20 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
             }
 
             if (!is_field) {
+                // Pre-compute the range end so we can skip getStyleAt for
+                // consecutive characters within the same uniform style range.
+                uint32_t range_end = registry.getStyleRangeEnd(logical_offset_base + logical_offset + start);
                 while (run_end < para.length() && para[run_end] != ' ' && para[run_end] != '\v') {
                     if (para.length() >= run_end + 7 && para.substr(run_end, 7) == "|FIELD:") break;
 
-                    PropertyBag next_style = registry.getStyleAt(logical_offset_base + logical_offset + run_end);
-                    if (!stylesAreEqual(word_style, next_style)) {
-                        break;
+                    uint32_t abs_pos = logical_offset_base + logical_offset + run_end;
+                    if (abs_pos >= range_end) {
+                        // Crossed a style boundary — re-evaluate
+                        PropertyBag next_style = registry.getStyleAt(abs_pos);
+                        if (!stylesAreEqual(word_style, next_style)) {
+                            break;
+                        }
+                        range_end = registry.getStyleRangeEnd(abs_pos);
                     }
                     run_end++;
                 }
@@ -1537,6 +1810,7 @@ std::vector<std::unique_ptr<PageBox>> LayoutEngine::layoutText(
         pages.push_back(std::move(current_page));
     }
 
+    --layout_depth_;
     return pages;
 }
 

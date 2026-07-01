@@ -461,6 +461,8 @@ std::tuple<TableBox*, int, int> PlumaEditor::findTableCellAt(Twips absolute_x, T
 bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFlags mods) {
     if (button != MouseButton::Left) return false;
 
+    syncLayout();
+
     is_dragging_ = true;
     // Resetear el timestamp de throttle para que el primer move sea inmediato
     last_drag_layout_time_ = std::chrono::steady_clock::time_point{};
@@ -618,7 +620,7 @@ bool PlumaEditor::onMouseDown(double x, double y, MouseButton button, ModifierFl
             active_doc_->selection.anchor = active_doc_->selection.head;
         }
         
-        updateLayout();
+        updateCursorState();
         return true;
     }
 
@@ -1172,6 +1174,8 @@ bool PlumaEditor::onMouseDoubleClick(double x, double y, MouseButton button, Mod
     (void)mods;
     if (button != MouseButton::Left) return false;
 
+    syncLayout();
+
     Twips absolute_x = Twips(static_cast<int32_t>(x * 15.0)) + viewport_x_;
     Twips absolute_y = Twips(static_cast<int32_t>(y * 15.0)) + viewport_y_;
 
@@ -1302,6 +1306,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             updateCursorState();
             break;
         case EditorAction::MoveCursorLeft:
+            syncLayout();
             if (active_doc_->selection.head > 0) {
                 active_doc_->selection.head--;
                 // Skip non-renderable positions (table tag characters like |ROW|, |CEL|…)
@@ -1316,6 +1321,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             }
             break;
         case EditorAction::MoveCursorRight:
+            syncLayout();
             if (active_doc_->selection.head < active_doc_->document.getLength()) {
                 active_doc_->selection.head++;
                 // Skip non-renderable positions (table tag characters)
@@ -1351,7 +1357,8 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 updateCursorState();
             }
             break;
-        case EditorAction::MoveCursorUp: {
+        case EditorAction::MoveCursorUp:
+            syncLayout();
             if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                 Twips half_line(90);
                 Twips target_y = Twips(std::max(0, rect->y.getValue() - half_line.getValue()));
@@ -1408,8 +1415,8 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 }
             }
             break;
-        }
-        case EditorAction::MoveCursorDown: {
+        case EditorAction::MoveCursorDown:
+            syncLayout();
             if (auto rect = CaretResolver::resolveLogicalToPhysical(current_pages_, active_doc_->selection.head, page_gap_, active_region_, active_page_index_)) {
                 // Land in the middle of the line below
                 Twips target_y = rect->y + rect->height + Twips(rect->height.getValue() / 2);
@@ -1426,7 +1433,6 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
                 }
             }
             break;
-        }
         case EditorAction::Cut:
             deleteSelection();
             break;
@@ -1487,6 +1493,7 @@ static uint32_t skipTableMarker(const std::string& doc_text, uint32_t pos) {
 }
 
 void PlumaEditor::insertTextAtCursor(const std::string& text) {
+    PLUMA_PROFILE_SCOPE("PlumaEditor::insertTextAtCursor");
     if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
     } else if (insert_mode_ == InsertMode::Replace) {
@@ -1597,7 +1604,20 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
     } else {
         active_doc_->selection.head = active_doc_->selection.anchor = start + text_to_insert.length();
     }
-    updateLayout();
+
+    // Defer full layout for single non-structural character insertion.
+    // Structural edits (newline, multi-char paste, table ops) flush synchronously.
+    // The deferred layout is flushed by the next syncLayout() call — typically
+    // before render (in draw()) or before a geometry read (cursor movement, hit-test).
+    if (text_to_insert.length() == 1 && text_to_insert[0] != '\n') {
+        if (layout_suspended_) {
+            layout_pending_ = true;
+        } else {
+            layout_dirty_ = true;
+        }
+    } else {
+        updateLayout();
+    }
     updateCursorState();
 }
 
@@ -1895,6 +1915,13 @@ void PlumaEditor::resumeLayout() {
     }
 }
 
+void PlumaEditor::syncLayout() {
+    if (layout_dirty_) {
+        layout_dirty_ = false;
+        updateLayout();
+    }
+}
+
 
 std::string PlumaEditor::getSelectedText() const {
     if (active_doc_->selection.isCollapsed()) return "";
@@ -1982,6 +2009,8 @@ void PlumaEditor::setScroll(Twips x, Twips y) {
 }
 
 void PlumaEditor::render(IRenderer& renderer) {
+    PLUMA_PROFILE_SCOPE("PlumaEditor::render");
+
     // Draw workspace background for the viewport
     renderer.drawRect({Twips(0), Twips(0), width_, height_}, workspace_bg_color_);
 
@@ -3589,4 +3618,3 @@ size_t PlumaEditor::getPageFromY(Twips y) const {
 }
 
 } // namespace pluma
-

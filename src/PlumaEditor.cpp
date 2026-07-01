@@ -220,6 +220,7 @@ std::optional<uint32_t> PlumaEditor::getBlankPageOffsetAtY(Twips y) const {
 }
 
 void PlumaEditor::deleteBlankPage(uint32_t offset) {
+    m_content_modified_ = true;
     std::string text = active_doc_->document.getText();
     if (offset < text.length() && text.length() - offset >= 11) {
         std::string tag = text.substr(offset, 11);
@@ -278,6 +279,7 @@ void PlumaEditor::applyStyle(uint32_t start, uint32_t length, PropertyId id, Pro
                         std::get<TextDecoration>(value) == TextDecoration::SpellingError);
 
     if (!is_spelling) {
+        m_content_modified_ = true;
         active_doc_->undo_manager.beginTransaction();
     }
 
@@ -659,6 +661,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                     
                     PropertyBag bag = active_doc_->format_registry.getStyleAt(src_offset);
 
+                    m_content_modified_ = true;
                     active_doc_->undo_manager.beginTransaction();
                     active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(actual_src, actual_len));
                     active_doc_->format_registry.deleteText(actual_src, actual_len);
@@ -794,6 +797,7 @@ bool PlumaEditor::onMouseUp(double x, double y, MouseButton button, ModifierFlag
                         
                         active_doc_->format_registry.applyStyle(new_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
                         active_doc_->format_registry.applyStyle(new_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                        m_content_modified_ = true;
                         
                         active_doc_->undo_manager.commitTransaction();
                         updateLayout();
@@ -906,6 +910,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
         // Apply directly to format registry for live feedback
         active_doc_->format_registry.applyStyle(*selected_image_offset_, 1, PropertyId::ImageWidth, w_pt);
         active_doc_->format_registry.applyStyle(*selected_image_offset_, 1, PropertyId::ImageHeight, h_pt);
+        m_content_modified_ = true;
         
         throttled_layout();
         return true;
@@ -1004,6 +1009,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                     new_widths += std::to_string(static_cast<int>(widths[i] / 15.0f + 0.5f));
                 }
                 active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableColumnWidths, new_widths);
+                m_content_modified_ = true;
             }
         }
 
@@ -1047,6 +1053,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                 i++;
             }
             active_doc_->format_registry.applyStyle(*active_table_offset_, 5, PropertyId::TableRowHeights, new_heights);
+            m_content_modified_ = true;
         }
 
         throttled_layout();
@@ -1083,6 +1090,7 @@ bool PlumaEditor::onMouseMove(double x, double y, ModifierFlags mods) {
                     float new_image_y_pt = new_img_y.getValue() / 15.0f;
                     active_doc_->format_registry.applyStyle(src_offset, tag_len, PropertyId::ImageX, new_image_x_pt);
                     active_doc_->format_registry.applyStyle(src_offset, tag_len, PropertyId::ImageY, new_image_y_pt);
+                    m_content_modified_ = true;
                     throttled_layout();
                     return true;
                 }
@@ -1293,6 +1301,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             }
             break;
         case EditorAction::Undo:
+            m_content_modified_ = true;
             active_doc_->undo_manager.undo();
             // Very naive cursor restoration for now
             active_doc_->selection.head = active_doc_->selection.anchor = active_doc_->document.getLength();
@@ -1300,6 +1309,7 @@ void PlumaEditor::onEditorAction(EditorAction action, const std::string& text, M
             updateCursorState();
             break;
         case EditorAction::Redo:
+            m_content_modified_ = true;
             active_doc_->undo_manager.redo();
             active_doc_->selection.head = active_doc_->selection.anchor = active_doc_->document.getLength();
             updateLayout();
@@ -1494,6 +1504,7 @@ static uint32_t skipTableMarker(const std::string& doc_text, uint32_t pos) {
 
 void PlumaEditor::insertTextAtCursor(const std::string& text) {
     PLUMA_PROFILE_SCOPE("PlumaEditor::insertTextAtCursor");
+    m_content_modified_ = true;
     if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
     } else if (insert_mode_ == InsertMode::Replace) {
@@ -1622,6 +1633,7 @@ void PlumaEditor::insertTextAtCursor(const std::string& text) {
 }
 
 void PlumaEditor::deleteBackward() {
+    m_content_modified_ = true;
     if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
     } else if (active_doc_->selection.head > 0) {
@@ -1768,6 +1780,7 @@ void PlumaEditor::deleteBackward() {
 }
 
 void PlumaEditor::deleteForward() {
+    m_content_modified_ = true;
     if (!active_doc_->selection.isCollapsed()) {
         deleteSelection();
     } else if (active_doc_->selection.head < active_doc_->document.getLength()) {
@@ -1843,6 +1856,7 @@ void PlumaEditor::deleteForward() {
 
 void PlumaEditor::deleteSelectedImage() {
     if (!selected_image_offset_.has_value()) return;
+    m_content_modified_ = true;
     
     uint32_t offset = *selected_image_offset_;
     std::string text_str = active_doc_->document.getText();
@@ -1930,6 +1944,7 @@ std::string PlumaEditor::getSelectedText() const {
 
 void PlumaEditor::deleteSelection() {
     if (!active_doc_->selection.isCollapsed()) {
+        m_content_modified_ = true;
         uint32_t start = active_doc_->selection.getStart();
         active_doc_->undo_manager.beginTransaction();
         active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(start, active_doc_->selection.getLength()));
@@ -1942,6 +1957,7 @@ void PlumaEditor::deleteSelection() {
 
 void PlumaEditor::pasteText(const std::string& text) {
     if (text.empty()) return;
+    m_content_modified_ = true;
     
     std::string sanitized = text;
     size_t p = 0;
@@ -1996,6 +2012,7 @@ void PlumaEditor::loadText(const std::string& text) {
     active_doc_->undo_manager.commitTransaction();
 
     active_doc_->selection = {static_cast<uint32_t>(text.length()), static_cast<uint32_t>(text.length())};
+    m_content_modified_ = false;
     updateLayout();
 }
 
@@ -2873,6 +2890,7 @@ void PlumaEditor::insertTableRowAbove() {
     }
 
     if (target_offset > 0) {
+        m_content_modified_ = true;
         std::string new_row = "|ROW|\n";
         for (int i=0; i<num_cols; i++) new_row += "|CEL|\n\n";
         
@@ -2921,6 +2939,7 @@ void PlumaEditor::insertTableRowBelow() {
     }
 
     if (target_offset > 0) {
+        m_content_modified_ = true;
         std::string new_row = "|ROW|\n";
         for (int i=0; i<num_cols; i++) new_row += "|CEL|\n\n";
         
@@ -2979,6 +2998,7 @@ void PlumaEditor::insertTableColumnLeft() {
     }
 
     if (!insert_offsets.empty()) {
+        m_content_modified_ = true;
         active_doc_->undo_manager.beginTransaction();
         
         // Reverse order to avoid shifting offsets
@@ -3042,8 +3062,8 @@ void PlumaEditor::insertTableColumnRight() {
         }
         para_start = para_end + 1;
     }
-
     if (!insert_offsets.empty()) {
+        m_content_modified_ = true;
         active_doc_->undo_manager.beginTransaction();
         
         // Reverse order to avoid shifting offsets
@@ -3057,6 +3077,7 @@ void PlumaEditor::insertTableColumnRight() {
         std::string old_num_str = std::to_string(num_cols);
         std::string new_num_str = std::to_string(num_cols + 1);
         active_doc_->undo_manager.addCommand(std::make_unique<DeleteTextCommand>(pos, old_num_str.length()));
+
         active_doc_->format_registry.deleteText(pos, old_num_str.length());
         active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(pos, new_num_str));
         active_doc_->format_registry.insertText(pos, new_num_str.length());
@@ -3192,6 +3213,7 @@ void PlumaEditor::mergeTableCells() {
     
     if (!target_found) return;
 
+    m_content_modified_ = true;
     active_doc_->undo_manager.beginTransaction();
 
     for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
@@ -3341,6 +3363,7 @@ void PlumaEditor::splitTableCells(bool horizontally) {
     
     if (!target) return;
     
+    m_content_modified_ = true;
     active_doc_->undo_manager.beginTransaction();
     
     if (horizontally) {
@@ -3581,6 +3604,7 @@ void PlumaEditor::splitTable() {
 
     if (!found_target_row) return;
 
+    m_content_modified_ = true;
     active_doc_->undo_manager.beginTransaction();
     std::string insertion = "|ENDTBL|\n\n|TBL:cols=" + cols_str + "|\n";
     active_doc_->undo_manager.addCommand(std::make_unique<InsertTextCommand>(target_row_offset, insertion));

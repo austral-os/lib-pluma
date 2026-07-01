@@ -533,6 +533,7 @@ public:
     void addIgnoredWord(const std::string& word) {
         if (std::find(ignored_words_.begin(), ignored_words_.end(), word) == ignored_words_.end()) {
             ignored_words_.push_back(word);
+            m_content_modified_ = true;
         }
     }
     const std::vector<std::string>& getIgnoredWords() const { return ignored_words_; }
@@ -609,6 +610,10 @@ private:
 public:
     bool isInTable() const { return active_table_offset_.has_value(); }
 
+    // --- Save Check Support ---
+    bool isContentModifiedSinceSave() const { return m_content_modified_; }
+    void markContentUnmodified() { m_content_modified_ = false; }
+
 private:
     TableSelection table_selection_;
     
@@ -631,6 +636,8 @@ private:
     // Calidad de render durante drag: usa CAIRO_FILTER_FAST mientras se arrastra
     bool is_dragging_{false};
     std::vector<std::string> ignored_words_;
+
+    bool m_content_modified_{false};
     
     void updateCursorState();
 };
